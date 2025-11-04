@@ -1,2 +1,2 @@
-# Cepheid-Variables---Fourier-Decomposition
+Lightcurve Fourier Decomposition
 Direct Fourier decomposition for multi-band Cepheid variable light curves
