@@ -2,25 +2,16 @@ import numpy as np
 
 from scipy.signal import find_peaks
 from scipy.optimize import minimize
-from astropy.stats import sigma_clip
 
 from gatspy import periodic # multiband lomb-scargle
 
-from .params import M_MAX, M_MIN, THRESHOLD, Amin, Amax, pmin, pmax, ORDERS_MAX, activated_bands, n_bands
+from .params import M_MAX, M_MIN, THRESHOLD, Amin, Amax, pmin, pmax, ORDERS_MAX, activated_bands, n_bands, K, harmonics, snr
 from .LC import compute_phase, phase_gap_exceeds, filters, phot_names
-from .LSQ import init_params, chisq, chisq_single, unpack_theta
+from .LSQ import LSQ_fit, chisq, chisq_single, unpack_theta
+from .period_finder import robust_period_search
 
 import warnings
 warnings.simplefilter("ignore")
-
-# ==================================
-fmin = 1/pmax # expected minimum frequency [days^-1] (<100d)
-fmax = 1/pmin # expected maximum frequency [days^-1](anomalous cepheids - 0.4d)
-
-# Define Lomb-Scargle model (default Nbase = 1, Nband = 1) + Fast
-model = periodic.LombScargleMultibandFast(fit_period = True, Nterms=1, optimizer_kwds={'quiet':True}) 
-model.optimizer.period_range = (pmin,pmax)
-# =====================================
 
 def _fit_wrapper(P0, args, M_fit, bounds_full, phase_flag, period_fit = False):
     """
@@ -30,7 +21,7 @@ def _fit_wrapper(P0, args, M_fit, bounds_full, phase_flag, period_fit = False):
     n_dim = 2 * n_bands + 2 * M_fit + 2 # n_dim 
     
     # initial parameter
-    theta0 = init_params(P0, args, M_fit, phase_flag=phase_flag)
+    theta0 = LSQ_fit(P0, args, M_fit, phase_flag=phase_flag)
     
     if period_fit:
         # P와 E의 bound를 theta0
@@ -45,17 +36,18 @@ def _fit_wrapper(P0, args, M_fit, bounds_full, phase_flag, period_fit = False):
                        bounds=bounds_full)
 
         if res.success:
-            return res.x, res.fun, M_fit, n_dim
+            return res.x, res.fun #, M_fit, n_dim
         else: flag = True
     else: flag = True
         
     if flag:
         # optimization failure
         chi2_init = chisq(theta0, *args, M_fit=M_fit, n_dim=n_dim)
-        return theta0, chi2_init, M_fit, n_dim
+        return theta0, chi2_init #, M_fit, n_dim
 
 # === Main Function ===
-def fourier_decomp(sid, period_fit=False, verbose=False):
+def fourier_decomp(sid, period_fit=False, verbose=False,
+                  K = K, harmonics = harmonics):
     # Load data
     pulsation = df_ident[df_ident['ID'] == sid]['pulsation'].values[0]
     data = ls_data[sid]
@@ -65,9 +57,10 @@ def fourier_decomp(sid, period_fit=False, verbose=False):
     # ======================================
     # 1) Lomb-Scargle - find initial period
     # =====================================
-    model.fit(t, mag, emag, bands)
-    P0 = model.best_period
-    Zmax = float(model.score(P0))
+    P0s, Zs = robust_period_search(t, mag, emag, bands, 
+                                   K = K, harmonics = harmonics, snr = snr)
+    Zmax = Zs.max()
+    if verbose: print(f'Lomb-Scargle Period = {P0s} / Z = {Zs}')
     
     # =====================================
     # 2) Perform fitting
@@ -81,21 +74,30 @@ def fourier_decomp(sid, period_fit=False, verbose=False):
     Q_bounds_max = [(0, 2 * np.pi)] * M_MAX
     P_bounds = [(pmin, pmax)] # (임시)
     E_bounds = [(-np.inf, np.inf)] # (임시)
-    
-    # phase filling check
-    phase_flag = np.array([phase_gap_exceeds(t[mask], P0, M_fit=M_MAX) for mask in bmask])
 
     # --- 1st fit (M_MAX) ---
     M_fit_1 = M_MAX
     bounds_1 = m_bounds + a_bounds + A_bounds_max + Q_bounds_max + P_bounds + E_bounds
     
-    # _fit_wrapper: return = (theta0, chi2, M_fit, n_dim)
-    theta_opt_1, chi2_opt_1, M_fit_1, n_dim_1 = _fit_wrapper(P0, args, M_fit_1, bounds_1, 
-                                                             phase_flag = phase_flag, period_fit= period_fit)
-    
+    # _fit_wrapper: return = (theta0, chi2)
+    chi2_opt_1 = np.inf
+    for Pi, Zi in zip(P0s, Zs):
+        if Zi<0.2*Zmax: continue # non significant component
+         # phase filling check
+        phase_flag_i = np.array([phase_gap_exceeds(t[mask], Pi, M_fit=M_MAX) for mask in bmask])
+        theta_1_tmp, chi2_1_tmp = _fit_wrapper(Pi, args, M_fit_1, bounds_1, 
+                                               phase_flag = phase_flag_i, period_fit= False)
+        if np.isfinite(chi2_1_tmp) and chi2_opt_1 > chi2_1_tmp: 
+            theta_opt_1 = theta_1_tmp
+            chi2_opt_1 = chi2_1_tmp
+            P0 = Pi; Zmax = Zi 
+            phase_flag = phase_flag_i
+            
     if not np.isfinite(chi2_opt_1):
-        if verbose: print(f'ID = {sid} / M_MAX fit failed.')
+        print(f'ID = {sid} / M_MAX fit failed.')
         return None # 1차 피팅 실패 시 중단
+    
+    if verbose: print(f'P0 = {P0:.4f} days')
 
     # --- truncation ---
     _, _, A_vec_1, _, _, _ = unpack_theta(theta_opt_1, n_bands, M_fit=M_fit_1, include_amp=True)
@@ -120,8 +122,8 @@ def fourier_decomp(sid, period_fit=False, verbose=False):
     # slicing 
     bounds_2 = m_bounds + a_bounds + A_bounds_max[:M_fit_2] + Q_bounds_max[:M_fit_2] + P_bounds + E_bounds
     
-    theta_opt_2, chi2_opt_2, M_fit_2, n_dim_2 = _fit_wrapper(P0, args, M_fit_2, bounds_2,
-                                                             phase_flag = phase_flag, period_fit= period_fit)
+    theta_opt_2, chi2_opt_2 = _fit_wrapper(P0, args, M_fit_2, bounds_2,
+                                           phase_flag = phase_flag, period_fit= period_fit)
 
     # 2nd fitting is better than 1st fitting
     if verbose:

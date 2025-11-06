@@ -95,7 +95,7 @@ def chisq(theta, t, mag, emag, bmask, M_fit, n_dim): # M_fit, n_dim
     return summ / dof # Reduced chi-square
 
 # === LSQ fits ===
-def init_params(P0, args, M_fit, bounds=None,
+def LSQ_fit(P0, args, M_fit, bounds=None,
                 phase_flag=None, Nmin=50, lam=1e-3): # M_fit
     t, mag, emag, bmask = args
     m0 = np.zeros(n_bands)

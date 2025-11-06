@@ -15,7 +15,10 @@ THRESHOLD = 0.05    # threshold
 
 # --- fitting range ---
 Amin, Amax = 0, 2 # [mag]
-pmin, pmax = 0.2, 300 # [days]'
+pmin, pmax = 0.2, 300 # [days]
 
+harmonics = 2 # maximum order of harmonics [P0, P0/n, n*P0]
+K = 8 # peak search for aliasing cleaning
+snr = 5 # relative peak strength for aliased frequency detection
 
 

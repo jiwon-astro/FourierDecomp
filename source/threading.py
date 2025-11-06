@@ -4,9 +4,9 @@ import csv
 
 from .params import M_MAX
 
-columns = ['ID','pulsation', 'N_V','N_I','sig_V','sig_I','rms_Vres','rms_Ires',
+columns = ['ID','pulsation', 'N_I','sig_I','rms_Ires',
            'Zmax','P(LS)','chi2','P','E','phi_rise', 'M_fit', # <-- M_fit 컬럼 추가
-           'V0','Amp_V','I0','Amp_I']+\
+           'I0','Amp_I']+\
 [f'A{i}' for i in range(1, M_MAX + 1)] + [f'Q{i}' for i in range(1, M_MAX + 1)] + ['flag']
 
 def thread_run(fd_output, decomp_mod, ids, period_fit = False, 
@@ -35,7 +35,7 @@ def thread_run(fd_output, decomp_mod, ids, period_fit = False,
     # file
     f_out = open(fd_output, 'a', newline='')
     writer = csv.writer(f_out, delimiter=' ')
-    pbar = tqdm(total = len(ids), desc = 'Fourier Decomposition')
+    pbar = tqdm(total = len(ids), desc = 'Fourier Decomposition', position = 0)
 
     # multiprocessing
     pool = Pool(processes = max_workers)
