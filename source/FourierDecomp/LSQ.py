@@ -3,20 +3,22 @@ import numpy as np
 from scipy.signal import find_peaks
 from scipy.optimize import minimize
 from scipy.linalg import lstsq, norm
+from sklearn.linear_model import Lasso
 
-from .params import ORDERS_MAX, ERR_FLOOR, Amin, Amax, activated_bands, n_bands
+from .params import M_MAX, ERR_FLOOR, Amin, Amax, activated_bands, n_bands
 
 # === Design matrix for Fourier series ===
 def cs_matrix(t, P, E, M_fit):
     N = len(t)
     X = np.ones((1 + 2*M_fit, N)) # updated : fourier series order is adjusted by M_fit
-    phi = 2 * np.pi * ((t - E) / P % 1.0) * ORDERS_MAX[:M_fit] 
+    orders = 1 + np.arange(M_fit).reshape(-1, 1) # Fourier series order
+    phi = 2 * np.pi * ((t - E) / P % 1.0) * orders 
     X[1::2] = np.cos(phi)
     X[2::2] = np.sin(phi)
     return X.T
 
 # === Penalized least squares for linear parameters ===
-def reg_lsq(X, y, w, lam):
+def reg_lsq(X, y, w, return_sol = False):
     """
     Solve (X^T W X + lam*I) sol = X^T W y
     Return m0, A_vec, Q_vec
@@ -28,15 +30,77 @@ def reg_lsq(X, y, w, lam):
     #pen = np.concatenate(([0], np.repeat(orders**2, 2))) # k^2 penalty -> worse performance
     #A_mat += lam * np.diag(pen)
     b = Xw.T.dot(yw)
-    sol = np.linalg.solve(A_mat, b)
-    # conversion
+    
+    try:
+        sol = np.linalg.solve(A_mat, b)
+    except np.linalg.LinAlgError:
+        # Fallback to slower lstsq if solve fails
+        sol = np.linalg.lstsq(Xw, yw, rcond=None)[0]
+        
+    if return_sol: return sol
+    else:
+        # conversion
+        m0 = sol[0]
+        coeffs = sol[1:]
+        A_vec = np.hypot(coeffs[0::2], coeffs[1::2])
+        Q_vec = (np.arctan2(coeffs[1::2], coeffs[0::2]) % (2*np.pi))
+        return m0, A_vec, Q_vec
+
+def reg_lsq_lasso(X, y, w, lam, beta_init):
+    """
+    Solve L1-penalized (LASSO) weighted least squares.
+    Objective: sum(w * (y - X.dot(beta))**2) + lam * sum(|beta[1:]|)
+    
+    Uses 'beta_init' (the WLS solution from reg_lsq) as the starting point.
+    sklearn.linear_model.Lasso (more bareable to dealing the sharp corner of the L1 penalty
+    """
+    X_body = X[:, 1:]
+    X_intercept = X[:, 0] # 1-vector
+    
+    if lam < 1e-9: sol = beta_init
+    else: 
+        #*intercept -> m0
+        model = Lasso(alpha=lam, fit_intercept=True, 
+                      warm_start=True, tol=1e-5, max_iter=3000)
+        # initialization
+        model.coef_ = beta_init[1:]
+        model.intercept_ = beta_init[0]
+        
+        try:
+            model.fit(X_body, y, sample_weight = w)
+            
+            sol = np.zeros(X.shape[1])
+            sol[0] = model.intercept_
+            sol[1:] = model.coef_
+            
+            # --- Sparsity ---
+            # small coefficients = 0  (hard thresholding).
+            sol[1:][np.abs(sol[1:]) < 1e-7] = 0.0 # 
+        except:
+            # Fallback or warning
+            print(f"Warning: L1 minimization in reg_lsq failed (lam={lam}). Using initial LSQ guess.")
+            sol = beta_init
+    
+    # --- Conversion ---
     m0 = sol[0]
     coeffs = sol[1:]
     A_vec = np.hypot(coeffs[0::2], coeffs[1::2])
     Q_vec = (np.arctan2(coeffs[1::2], coeffs[0::2]) % (2*np.pi))
+    
     return m0, A_vec, Q_vec
 
 # === Vectorized Fourier Series === 
+def H(theta, t, M_fit = M_MAX):
+    # A, Q : fourier coefficients (size M vector) 
+    A, Q = theta
+    P = 1  # unit period
+    phi = t / P % 1.0  # to make numerically stable
+    orders = 1 + np.arange(M_fit).reshape(-1, 1) # Fourier series order
+    phase = 2 * np.pi * phi * orders
+    C, S = np.cos(phase), np.sin(phase)
+    alpha, beta = A*np.cos(Q), A*np.sin(Q) # Fourier Coefficients     
+    return alpha @ C + beta @ S 
+
 def F(theta, t, M_fit): 
     # m0 : mean magnitude
     # P : period
@@ -44,7 +108,8 @@ def F(theta, t, M_fit):
     # A, Q : fourier coefficients (size M vector) 
     m0, amp0, A, Q, P, E = theta
     phi = (t - E) / P % 1.0  # to make numerically stable
-    phase = 2 * np.pi * phi * ORDERS_MAX[:M_fit] 
+    orders = 1 + np.arange(M_fit).reshape(-1, 1) # Fourier series order
+    phase = 2 * np.pi * phi * orders
     C, S = np.cos(phase), np.sin(phase)
     alpha, beta = A * np.cos(Q), A * np.sin(Q) # Fourier Coefficients
     return m0 + amp0 * (alpha @ C + beta @ S)
@@ -95,7 +160,7 @@ def chisq(theta, t, mag, emag, bmask, M_fit, n_dim): # M_fit, n_dim
     return summ / dof # Reduced chi-square
 
 # === LSQ fits ===
-def LSQ_fit(P0, args, M_fit, bounds=None,
+def LSQ_fit(P0, args, M_fit, opt_method = 'lsq', bounds=None,
                 phase_flag=None, Nmin=50, lam=1e-3): # M_fit
     t, mag, emag, bmask = args
     m0 = np.zeros(n_bands)
@@ -118,8 +183,12 @@ def LSQ_fit(P0, args, M_fit, bounds=None,
         X_ft = cs_matrix(t_ft, P0, E0, M_fit)
         w_ft = 1.0 / np.maximum(emag_ft, ERR_FLOOR)**2
         
-        m0_ft, A_ft, Q_ft = reg_lsq(X_ft, mag_ft, w_ft, lam)
-        
+        if opt_method == 'lsq': 
+            m0_ft, A_ft, Q_ft = reg_lsq(X_ft, mag_ft, w_ft)
+        if opt_method == 'lasso':
+            beta_init = reg_lsq(X_ft, mag_ft, w_ft, return_sol = True)
+            m0_ft, A_ft, Q_ft = reg_lsq_lasso(X_ft, mag_ft, w_ft, lam = lam, beta_init = beta_init)
+            
         res_success = False # minimization success flag
         if phase_flag is not None:
             if phase_flag[ib]:

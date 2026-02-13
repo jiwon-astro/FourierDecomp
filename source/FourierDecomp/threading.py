@@ -2,14 +2,14 @@ from multiprocessing import Pool, Lock, Manager
 from tqdm.notebook import tqdm
 import csv
 
-from .params import M_MAX
+from .params import M_MAX, period_fit
 
 columns = ['ID','pulsation', 'N_I','sig_I','rms_Ires',
            'Zmax','P(LS)','chi2','P','E','phi_rise', 'M_fit', # <-- M_fit 컬럼 추가
            'I0','Amp_I']+\
 [f'A{i}' for i in range(1, M_MAX + 1)] + [f'Q{i}' for i in range(1, M_MAX + 1)] + ['flag']
 
-def thread_run(fd_output, decomp_mod, ids, period_fit = False, 
+def thread_run(fd_output, decomp_mod, ids, period_fit = period_fit, 
                max_workers = 8):
     """
     Run decomposition.fourier_decomp(sid, ...) over many IDs with threads.

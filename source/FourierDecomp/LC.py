@@ -97,3 +97,5 @@ def plot_lc(sid, P0, selected_filters = ['I'], phase_max = 2):
         ax[i].set_xlim(-0.1,phase_max+0.1)
         ax[i].set_ylabel('Magnitude\n[mag]')
         if i==n_bands-1: ax[i].set_xlabel('Phase')
+    
+    return fig, ax
