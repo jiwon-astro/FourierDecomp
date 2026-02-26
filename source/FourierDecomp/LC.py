@@ -1,7 +1,7 @@
 import numpy as np
 import matplotlib.pyplot as plt
-from .params import M_MAX, filters, prefixs, lc_colors, lc_markers
-from .IO import phot_names
+from .params import M_MAX
+from .IO import phot_names, epoch_arrays, get_data_config
 
 def compute_phase(t, P):
     return (t / P) % 1.0
@@ -62,9 +62,14 @@ def set_ylim(y,yerr,amp=1):
     return ymax+yscale, ymin-yscale
 
 # plot light curve
-def plot_lc(sid, P0, selected_filters = ['I'], phase_max = 2):
+def plot_lc(sid, P0, mode='ogle', selected_filters = ['I'], phase_max = 2):
+    cfg = get_data_config(mode)
+    filters = cfg.filters
+    lc_colors = cfg.lc_colors
+    lc_markers = cfg.lc_markers
+
     n_bands = len(selected_filters)
-    data = ls_data[sid]
+    data = epoch_arrays(ls_data, sid, mode=mode)
     t, mag, emag, bands = [data[key].values for key in [*phot_names,'band']]
     bmask = [(bands==band) for band in selected_filters]
 

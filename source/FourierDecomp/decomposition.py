@@ -5,9 +5,9 @@ from scipy.optimize import minimize
 
 from gatspy import periodic # multiband lomb-scargle
 
-from .params import M_MAX, M_MIN, THRESHOLD, Amin, Amax, pmin, pmax, filters, activated_bands, n_bands, n0, K, harmonics, snr, opt_method, lam
+from .params import M_MAX, M_MIN, THRESHOLD, Amin, Amax, pmin, pmax, n0, K, harmonics, snr, opt_method, lam
 from .LC import phase_gap_exceeds
-from .IO import phot_names
+from .IO import phot_names, epoch_arrays, get_data_config
 from .LSQ import LSQ_fit, chisq, chisq_single, unpack_theta
 from .period_finder import robust_period_search
 
@@ -53,10 +53,16 @@ def _fit_wrapper(P0, args, M_fit, bounds_full, phase_flag, period_fit = False):
 
 # === Main Function ===
 def fourier_decomp(sid, period_fit=False, verbose=False, plot_LS = False,
-                  K = K, harmonics = harmonics):
+                  K = K, harmonics = harmonics, mode='ogle'):
     # Load data
     pulsation = df_ident[df_ident['ID'] == sid]['pulsation'].values[0]
-    data = ls_data[sid]
+    
+    if mode is None: mode = get_data_config().mode
+    cfg = get_data_config(mode)
+    filters = cfg.filters; activated_bands = cfg.activated_bands; n_bands = cfg.n_bands
+
+    data = epoch_arrays(ls_data, sid, mode=mode)
+
     t, mag, emag, bands = [data[key].values for key in [*phot_names, 'band']]
     bmask = [(bands == band) for band in filters]
 

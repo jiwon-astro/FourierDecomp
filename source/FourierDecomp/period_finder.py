@@ -6,7 +6,8 @@ from scipy.signal import find_peaks, peak_prominences
 from scipy.optimize import minimize_scalar # brent method
 from astropy.stats import sigma_clip
 
-from .params import pmin, pmax, n0, delta_P_tol, filters
+from .params import pmin, pmax, n0, delta_P_tol
+from .IO import get_data_config
 
 # ==================================
 fmin = 1/pmax # expected minimum frequency [days^-1] (<100d)
@@ -34,12 +35,12 @@ def calc_fgrid(t, n0 = 5):
     
     return f, period, delta_f
 
-def window_function(t, bands, f):
+def window_function(t, bmask, f):
     t0, T = t[0], t[-1]-t[0] #initial epoch & length of time window    
     # calculate window function power spectrum
     P_W = np.zeros_like(f)
-    for b in filters:
-        t_ft = t[bands == b]
+    for bm in bmask :
+        t_ft = t[bm]
         tn_ft = np.expand_dims(t_ft-t0, axis=0).T
         # window power spectrum of current band
         phase = np.exp(-2*np.pi*1j*f*tn_ft)
@@ -70,6 +71,10 @@ def robust_period_search(t, mag, emag, bands,
                          plot = False):
     freqs, periods, delta_f = calc_fgrid(t, n0 = n0)
     
+    cfg = get_data_config()
+    selected_filters = cfg.selected_filters
+    bmask = [(bands==band) for band in selected_filters]
+
     # 1) evaluate Lomb-Scargle power
     model.fit(t, mag, emag, bands)
     Pf_LS = model.periodogram(periods)

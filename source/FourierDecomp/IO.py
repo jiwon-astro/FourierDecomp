@@ -1,12 +1,66 @@
 
 import numpy as np
 import pandas as pd
+from dataclasses import dataclass
+from typing import Optional, Dict, Any
 from tqdm.notebook import tqdm
 from concurrent.futures import ThreadPoolExecutor  # Threading
 from pathlib import Path
 from astropy.table import Table, vstack
 
-from .params import filters
+from .params import data_class, filters, prefixs, prefixs
+
+# ============================================================================
+# data configuration
+# ============================================================================
+
+# IO.py에 추가
+
+from dataclasses import dataclass
+from typing import Optional, Dict, Any
+import numpy as np
+
+@dataclass(frozen=True)
+class DataConfig:
+    mode: str
+    filters: np.ndarray          # e.g. ['V','I'] or ['g','bp','rp']
+    prefixs: np.ndarray          # e.g. [0,1] or [0,1,2]
+    activated_bands: list        # indices in prefixs
+    n_bands: int
+    lc_colors: list
+    lc_markers: list
+
+def get_data_config(mode: Optional[str] = None) -> DataConfig:
+    """
+    params.py: data_class(=mode) -> filters/plot style
+
+    mode:
+      - None: params.data_class
+      - 'ogle' or 'gaia'
+    """
+    from . import params as P  # 런타임에 읽어오면 (노트북에서 params 수정 후) 반영이 쉬움
+
+    mode = (mode or P.mode).lower().strip()
+    if mode not in ("ogle", "gaia"):
+        raise ValueError(f"Unknown data_class/mode: {mode}")
+
+    flt = np.array(P.filters, dtype=object)
+    pfx = np.array(P.prefixs, dtype=int)
+    act = np.array(P.activated_bands, dtype=int)
+    n_b = len(act)
+
+    colors = list(P.lc_colors)
+    markers = list(P.lc_markers)
+
+    return DataConfig(
+        mode=mode,
+        filters=flt,
+        prefixs=pfx,
+        activated_bands=act,
+        n_bands=n_b,
+        lc_colors=colors,
+        lc_markers=markers,
+    )
 
 # =============================================================================
 # epoch photometry I/O 
@@ -20,8 +74,6 @@ def _load_chunk_ogle(source_ids, phot_dir,
     data = {}
     if phot_dir is None:
         raise ValueError("phot_cat_dir is required for mode='ogle'")
-    if filters is None:
-        raise ValueError("filter list is required for mode='ogle'")
     for sid in source_ids: # e.g.) OGLE-LMC-ACEP-001
         tbls = []
         for b in filters:
@@ -102,10 +154,11 @@ def _chunk_loader_threading(source_ids, phot_dir, mode, desc = None,
             dl.update(fut.result())
     return dl
 
-def data_loader(ident_fpath, phot_dir, mode="ogle", max_workers=12, chunk_size=200):
+def data_loader(ident_fpath, phot_dir, mode=None, max_workers=12, chunk_size=200):
     #if (ident_fpath, str) or (ident_fpath, Path):
     #    ident_fpath = [ident_fpath]
     phot_dir = Path(phot_dir)
+    if mode is None: mode = get_data_config().mode
     # ---- OGLE ----
     if mode == "ogle":
         df_ident, jobs = _read_ident_ogle(ident_fpath) #list of identifier paths
@@ -163,7 +216,7 @@ def gaia_ZP_cal(flux, ferr, band):
     return mag, mag_err
 
 
-def extract_gaia_band_data(dl_dict, source_id, band, monitor=False):
+def extract_gaia_band_data(dl_dict, source_id, band, monitor=True):
     """
     Extract (time, mag, mag_err) for a Gaia band from a loaded astropy.Table.
 
@@ -239,7 +292,7 @@ def ogle_epoch_arrays(data_dict, source_id, filters=("V","I")):
 # unified epoch array getter for downstream code
 # =============================================================================
 
-def epoch_arrays(data_dict, source_id, mode = "ogle", filters=None):
+def epoch_arrays(data_dict, source_id, mode = None, filters=None):
     """
     Unified accessor to get (t, mag, emag, band) arrays for a given source_id.
 
@@ -250,16 +303,19 @@ def epoch_arrays(data_dict, source_id, mode = "ogle", filters=None):
       - ogle: subset of filterss (default: ('V','I'))
       - gaia: subset of ('g','bp','rp') (default: ('g','bp','rp'))
     """
-    mode = mode.lower().strip()
-    source_id = int(source_id)
-    if mode == "ogle":
-        if filters is None:
-            filters = ("V","I")
-        return ogle_epoch_arrays(data_dict, source_id, filters=filters)
+    if mode is None: 
+        cfg = get_data_config()
+        mode = cfg.mode
+    else: cfg = get_data_config(mode)
+    
+    if filters is None:
+        filters = cfg.filters.tolist()
 
-    if mode == "gaia":
-        if filters is None:
-            filters = ("g", "bp", "rp")
+    if mode == "ogle":
+        return ogle_epoch_arrays(data_dict, source_id, filters=filters)
+    elif mode == "gaia":
         return gaia_epoch_arrays(data_dict, int(source_id), filters=filters)
 
     raise ValueError("mode must be 'ogle' or 'gaia'")
+
+

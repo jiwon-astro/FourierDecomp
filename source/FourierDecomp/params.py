@@ -1,12 +1,21 @@
 import numpy as np
 
 # --- LC photometric bands ----
-filters = np.array(['V','I'])
-prefixs = np.array([0, 1])
-lc_colors = ['yellowgreen','orange']
-lc_markers = ['o','s']
+data_class = 'ogle'
+if data_class == 'ogle':
+    filters = np.array(['V','I'])
+    prefixs = np.array([0, 1])
+    lc_colors = ['yellowgreen','orange']
+    lc_markers = ['o','s']
+    activated_bands = [1] # in prefixs
 
-activated_bands = [1] # in prefixs
+elif data_class == 'gaia':
+    filters = np.array(['g','bp','rp'])
+    prefixs = np.array([0, 1, 2])
+    colors = ['#000000','#0343DF','#E50000']
+    markers = ['o','s','D']
+    activated_bands = [0,1,2] # in prefixs
+
 n_bands = len(activated_bands)
 
 # --- fourier series ---
