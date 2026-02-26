@@ -22,13 +22,12 @@ def _load_chunk_ogle(source_ids, phot_dir,
         raise ValueError("phot_cat_dir is required for mode='ogle'")
     if filters is None:
         raise ValueError("filter list is required for mode='ogle'")
-    for sid in source_ids:
-        sid = int(sid)
+    for sid in source_ids: # e.g.) OGLE-LMC-ACEP-001
         tbls = []
         for b in filters:
             fname = Path(phot_dir) / b / f"{sid}.dat"
             if not fname.exists(): continue
-            tab = Table.read(fname, format="ascii.no_header", 
+            tab = Table.read(str(fname), format="ascii.no_header", 
                                 names=phot_names, guess=False,)
             tab['band'] = b
             tbls.append(tab)
@@ -106,14 +105,16 @@ def _chunk_loader_threading(source_ids, phot_dir, mode, desc = None,
 def data_loader(ident_fpath, phot_dir, mode="ogle", max_workers=12, chunk_size=200):
     #if (ident_fpath, str) or (ident_fpath, Path):
     #    ident_fpath = [ident_fpath]
+    phot_dir = Path(phot_dir)
     # ---- OGLE ----
     if mode == "ogle":
-        df_ident, jobs = _read_ident_ogle(ident_fpath)
+        df_ident, jobs = _read_ident_ogle(ident_fpath) #list of identifier paths
         dl = {}
-        for phot_dir, (cat_name, cat_ids) in zip(ident_fpath, jobs):
+        for cat_name, cat_ids in jobs:
+            print(f"Load data from {phot_dir/cat_name}")
             dl_cat = _chunk_loader_threading(
                 cat_ids,
-                phot_dir,
+                phot_dir / cat_name,
                 mode="ogle",
                 max_workers=max_workers,
                 chunk_size=chunk_size,
@@ -124,12 +125,12 @@ def data_loader(ident_fpath, phot_dir, mode="ogle", max_workers=12, chunk_size=2
 
     # ---- GAIA ----
     elif mode=="gaia":
-        df_ident = _read_ident_gaia(ident_fpath)
+        df_ident = _read_ident_gaia(ident_fpath) # single file path
         source_ids = df_ident["SOURCE_ID"].astype(int).tolist()
 
         dl = _chunk_loader_threading(
             source_ids,
-            phot_dir=ident_fpath,
+            phot_dir=phot_dir,
             mode="gaia",
             max_workers=max_workers,
             chunk_size=max(chunk_size, 500),  # 파일 열기 위주라 크게 잡는 편이 효율적일 때 많음
@@ -160,36 +161,6 @@ def gaia_ZP_cal(flux, ferr, band):
     mag = -2.5 * np.log10(flux) + ZP[band]
     mag_err = np.sqrt((-2.5 * ferr / flux) ** 2 + ZPerr[band] ** 2)
     return mag, mag_err
-
-
-def load_gaia_epoch_phot(query_result, directory, max_workers=5, chunk_size=1000,
-                        filename_pattern="epphot_DR3_{source_id}.ecsv"):
-    """
-    Load Gaia DR3 epoch photometry ECSV files into a dict[source_id] -> astropy.Table.
-
-    Mirrors the I/O pattern in your notebook:
-      filename = directory / f"epphot_DR3_{source_id}.ecsv"
-
-    query_result must provide 'SOURCE_ID' column/field.
-    """
-    directory = Path(directory)
-    if hasattr(query_result, "__getitem__"):
-        source_ids = np.array(query_result["SOURCE_ID"])
-    else:
-        raise ValueError("query_result must provide SOURCE_ID field/column")
-
-    n_max = len(source_ids)
-    dl = {} # Datalink
-
-    #Threading
-    with ThreadPoolExecutor(max_workers=max_workers) as executor:
-        futures = []
-        for i in range(0, n_max, chunk_size):
-            ids = source_ids[i:min(i + chunk_size, n_max)]
-            futures.append(executor.submit(_load_chunk, ids))
-        for fut in tqdm(futures, desc="gaia_epoch_phot"):
-            dl.update(fut.result())
-    return dl
 
 
 def extract_gaia_band_data(dl_dict, source_id, band, monitor=False):
@@ -268,7 +239,7 @@ def ogle_epoch_arrays(data_dict, source_id, filters=("V","I")):
 # unified epoch array getter for downstream code
 # =============================================================================
 
-def epoch_arrays(data_dict, source_id, mode = "ogle", filters=filters):
+def epoch_arrays(data_dict, source_id, mode = "ogle", filters=None):
     """
     Unified accessor to get (t, mag, emag, band) arrays for a given source_id.
 
@@ -276,7 +247,7 @@ def epoch_arrays(data_dict, source_id, mode = "ogle", filters=filters):
     mode='gaia': expects data_dict[source_id] is astropy.Table loaded by `load_gaia_epoch_phot`.
 
     bands:
-      - ogle: subset of filterss (default: filters)
+      - ogle: subset of filterss (default: ('V','I'))
       - gaia: subset of ('g','bp','rp') (default: ('g','bp','rp'))
     """
     mode = mode.lower().strip()
