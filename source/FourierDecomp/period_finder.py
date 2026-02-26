@@ -6,8 +6,7 @@ from scipy.signal import find_peaks, peak_prominences
 from scipy.optimize import minimize_scalar # brent method
 from astropy.stats import sigma_clip
 
-from .params import pmin, pmax, n0, delta_P_tol
-from .LC import filters
+from .params import pmin, pmax, n0, delta_P_tol, filters
 
 # ==================================
 fmin = 1/pmax # expected minimum frequency [days^-1] (<100d)

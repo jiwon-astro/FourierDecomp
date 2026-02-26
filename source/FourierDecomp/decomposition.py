@@ -5,8 +5,9 @@ from scipy.optimize import minimize
 
 from gatspy import periodic # multiband lomb-scargle
 
-from .params import M_MAX, M_MIN, THRESHOLD, Amin, Amax, pmin, pmax, activated_bands, n_bands, n0, K, harmonics, snr, opt_method, lam
-from .LC import compute_phase, phase_gap_exceeds, filters, phot_names
+from .params import M_MAX, M_MIN, THRESHOLD, Amin, Amax, pmin, pmax, filters, activated_bands, n_bands, n0, K, harmonics, snr, opt_method, lam
+from .LC import phase_gap_exceeds
+from .IO import phot_names
 from .LSQ import LSQ_fit, chisq, chisq_single, unpack_theta
 from .period_finder import robust_period_search
 

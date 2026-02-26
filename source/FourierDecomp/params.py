@@ -1,6 +1,11 @@
 import numpy as np
 
 # --- LC photometric bands ----
+filters = np.array(['V','I'])
+prefixs = np.array([0, 1])
+lc_colors = ['yellowgreen','orange']
+lc_markers = ['o','s']
+
 activated_bands = [1] # in prefixs
 n_bands = len(activated_bands)
 

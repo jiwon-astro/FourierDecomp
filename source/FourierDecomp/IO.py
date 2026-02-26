@@ -6,7 +6,7 @@ from concurrent.futures import ThreadPoolExecutor  # Threading
 from pathlib import Path
 from astropy.table import Table, vstack
 
-from .LC import filters
+from .params import filters
 
 # =============================================================================
 # epoch photometry I/O 
@@ -103,7 +103,7 @@ def _chunk_loader_threading(source_ids, phot_dir, mode, desc = None,
             dl.update(fut.result())
     return dl
 
-def data_loader(ident_fpath, mode="ogle", max_workers=12, chunk_size=200):
+def data_loader(ident_fpath, phot_dir, mode="ogle", max_workers=12, chunk_size=200):
     #if (ident_fpath, str) or (ident_fpath, Path):
     #    ident_fpath = [ident_fpath]
     # ---- OGLE ----

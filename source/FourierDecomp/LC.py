@@ -1,13 +1,7 @@
 import numpy as np
 import matplotlib.pyplot as plt
-from .params import M_MAX
+from .params import M_MAX, filters, prefixs, lc_colors, lc_markers
 from .IO import phot_names
-
-# --- photometric bands ---
-filters = np.array(['V','I'])
-prefixs = np.array([0, 1])
-lc_colors = ['yellowgreen','orange']
-lc_markers = ['o','s']
 
 def compute_phase(t, P):
     return (t / P) % 1.0
