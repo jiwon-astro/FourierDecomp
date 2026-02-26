@@ -39,8 +39,8 @@ def window_function(t, bands, f):
     t0, T = t[0], t[-1]-t[0] #initial epoch & length of time window    
     # calculate window function power spectrum
     P_W = np.zeros_like(f)
-    for band in filters:
-        t_ft = t[bands == band]
+    for b in filters:
+        t_ft = t[bands == b]
         tn_ft = np.expand_dims(t_ft-t0, axis=0).T
         # window power spectrum of current band
         phase = np.exp(-2*np.pi*1j*f*tn_ft)

@@ -1,7 +1,7 @@
 import numpy as np
 import matplotlib.pyplot as plt
 from .params import M_MAX
-from .legacy.IO import ident_names, phot_names
+from .IO import phot_names
 
 # --- photometric bands ---
 filters = np.array(['V','I'])
@@ -79,7 +79,7 @@ def plot_lc(sid, P0, selected_filters = ['I'], phase_max = 2):
     ax[0].set_title(f'{sid}',loc='left',fontsize = 18)
     
     for i, band in enumerate(selected_filters):
-        mask = bmask[i]; ib = prefixs[filters == band][0] # from filter catalog
+        mask = bmask[i]; ib = prefixs[bands == band][0] # from filter catalog
         t_ft, mag_ft, emag_ft = t[mask], mag[mask], emag[mask]
         if len(t_ft)==0: continue
         ext_phase, ext_mag, ext_emag = expand_light_curve(t_ft, mag_ft, emag_ft, P0, phase_range = (0, phase_max))

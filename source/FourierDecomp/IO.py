@@ -6,7 +6,7 @@ from concurrent.futures import ThreadPoolExecutor  # Threading
 from pathlib import Path
 from astropy.table import Table, vstack
 
-from .LC import filters, prefixs
+from .LC import filters
 
 # =============================================================================
 # epoch photometry I/O 
@@ -21,18 +21,17 @@ def _load_chunk_ogle(source_ids, phot_dir,
     if phot_dir is None:
         raise ValueError("phot_cat_dir is required for mode='ogle'")
     if filters is None:
-        raise ValueError("filters is required for mode='ogle'")
+        raise ValueError("filter list is required for mode='ogle'")
     for sid in source_ids:
         sid = int(sid)
         tbls = []
-        for band in filters:
-            fname = Path(phot_dir) / band / f"{sid}.dat"
+        for b in filters:
+            fname = Path(phot_dir) / b / f"{sid}.dat"
             if not fname.exists(): continue
-            try:
-                tab = Table.read(fname, format="ascii.no_header", 
-                                 names=phot_names, guess=False,)
-                tab['band'] = band
-                tbls.append(tab)
+            tab = Table.read(fname, format="ascii.no_header", 
+                                names=phot_names, guess=False,)
+            tab['band'] = b
+            tbls.append(tab)
         if tbls:
             data[sid] = vstack(tbls, metadata_conflicts="silent")
     return data
@@ -79,7 +78,7 @@ def _read_ident_ogle(ident_fpath_list):
         if ident_fpath.stem in ['blg_cep_ident']: n_infer = 10
         df_ident_cat = pd.read_fwf(ident_fpath, header = None, names = ident_names, infer_nrows = n_infer)
         cat_ids      = df_ident_cat['ID'] # ids
-        cat_name     = (ident_path.stem).strip('_ident') # catalog name
+        cat_name     = (ident_fpath.stem).strip('_ident') # catalog name
 
         cat.append(df_ident_cat)
         jobs.append((cat_name, cat_ids)) # using it to load catalog specific epoch photometry data
@@ -105,8 +104,8 @@ def _chunk_loader_threading(source_ids, phot_dir, mode, desc = None,
     return dl
 
 def data_loader(ident_fpath, mode="ogle", max_workers=12, chunk_size=200):
-    if (ident_fpath, str) or (ident_fpath, Path):
-        ident_fpath = [ident_fpath]
+    #if (ident_fpath, str) or (ident_fpath, Path):
+    #    ident_fpath = [ident_fpath]
     # ---- OGLE ----
     if mode == "ogle":
         df_ident, jobs = _read_ident_ogle(ident_fpath)
@@ -124,13 +123,13 @@ def data_loader(ident_fpath, mode="ogle", max_workers=12, chunk_size=200):
         return df_ident, dl
 
     # ---- GAIA ----
-    elif: mode=="gaia":
-        df_ident = _read_ident_gaia(ls_ident)
+    elif mode=="gaia":
+        df_ident = _read_ident_gaia(ident_fpath)
         source_ids = df_ident["SOURCE_ID"].astype(int).tolist()
 
         dl = _chunk_loader_threading(
             source_ids,
-            phot_dir=ident_fpath[0],
+            phot_dir=ident_fpath,
             mode="gaia",
             max_workers=max_workers,
             chunk_size=max(chunk_size, 500),  # 파일 열기 위주라 크게 잡는 편이 효율적일 때 많음
@@ -143,7 +142,6 @@ def wire_globals(decomp_mod, ls_data, df_ident):
     """Attach globals into `decomposition` module namespace."""
     decomp_mod.ls_data = ls_data
     decomp_mod.df_ident = df_ident
-
 
 # =============================================================================
 # Gaia epoch photometry support (DR3 ECSV)
@@ -242,11 +240,11 @@ def extract_gaia_band_data(dl_dict, source_id, band, monitor=False):
     return time.astype(float), np.asarray(mag, dtype=float), np.asarray(mag_err, dtype=float)
 
 
-def gaia_epoch_arrays(dl_dict, source_id, bands=("g", "bp", "rp")):
+def gaia_epoch_arrays(dl_dict, source_id, filters=("g", "bp", "rp")):
     """Return concatenated arrays t, mag, emag, band_label for FourierDecomp compatibility."""
     t_all, m_all, e_all, b_all = [], [], [], []
-    for b in bands:
-        t, m, e = extract_gaia_band_data(dl_dict, source_id, b, monitor=monitor)
+    for b in filters:
+        t, m, e = extract_gaia_band_data(dl_dict, source_id, b)
         if len(t) == 0:
             continue
         t_all.append(t)
@@ -257,9 +255,9 @@ def gaia_epoch_arrays(dl_dict, source_id, bands=("g", "bp", "rp")):
         return np.array([]), np.array([]), np.array([]), np.array([])
     return (np.concatenate(t_all), np.concatenate(m_all), np.concatenate(e_all), np.concatenate(b_all))
 
-def ogle_epoch_arrays(data_dict, source_id, bands=("V","I")):
+def ogle_epoch_arrays(data_dict, source_id, filters=("V","I")):
     df = data_dict[source_id]
-    m = df["band"].isin(list(bands))
+    m = df["band"].isin(list(filters))
     t = df.loc[m, phot_names[0]].to_numpy(dtype=float)
     mag = df.loc[m, phot_names[1]].to_numpy(dtype=float)
     emag = df.loc[m, phot_names[2]].to_numpy(dtype=float)
@@ -270,7 +268,7 @@ def ogle_epoch_arrays(data_dict, source_id, bands=("V","I")):
 # unified epoch array getter for downstream code
 # =============================================================================
 
-def epoch_arrays(data_dict, source_id, mode: str = "ogle", bands=None):
+def epoch_arrays(data_dict, source_id, mode = "ogle", filters=filters):
     """
     Unified accessor to get (t, mag, emag, band) arrays for a given source_id.
 
@@ -278,19 +276,19 @@ def epoch_arrays(data_dict, source_id, mode: str = "ogle", bands=None):
     mode='gaia': expects data_dict[source_id] is astropy.Table loaded by `load_gaia_epoch_phot`.
 
     bands:
-      - ogle: subset of filters (default: filters)
+      - ogle: subset of filterss (default: filters)
       - gaia: subset of ('g','bp','rp') (default: ('g','bp','rp'))
     """
     mode = mode.lower().strip()
     source_id = int(source_id)
     if mode == "ogle":
-        if bands is None:
-            bands = ("V","I")
-        return ogle_epoch_arrays(data_dict, source_id, bands=bands)
+        if filters is None:
+            filters = ("V","I")
+        return ogle_epoch_arrays(data_dict, source_id, filters=filters)
 
     if mode == "gaia":
-        if bands is None:
-            bands = ("g", "bp", "rp")
-        return gaia_epoch_arrays(data_dict, int(source_id), bands=bands)
+        if filters is None:
+            filters = ("g", "bp", "rp")
+        return gaia_epoch_arrays(data_dict, int(source_id), filters=filters)
 
     raise ValueError("mode must be 'ogle' or 'gaia'")
