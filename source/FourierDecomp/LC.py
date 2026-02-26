@@ -1,10 +1,7 @@
 import numpy as np
 import matplotlib.pyplot as plt
 from .params import M_MAX
-
-# --- LC identifier ---
-ident_names = ['ID','pulsation','RA','Dec','OGLE-IV ID','OGLE-III ID','OGLE-II ID','other']
-phot_names = ['t','mag','emag']
+from .legacy.IO import ident_names, phot_names
 
 # --- photometric bands ---
 filters = np.array(['V','I'])
