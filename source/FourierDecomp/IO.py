@@ -52,11 +52,11 @@ def _load_chunk_gaia(source_ids, phot_dir):
             continue
     return data
 
-def _load_chunk(source_ids, mode="ogle",**kwargs):
+def _load_chunk(source_ids, phot_dir, mode="ogle",**kwargs):
     if mode == "ogle":
-        return _load_chunk_ogle(source_ids, **kwargs)
+        return _load_chunk_ogle(source_ids, phot_dir, **kwargs)
     elif mode == "gaia":
-        return _load_chunk_gaia(source_ids, **kwargs)
+        return _load_chunk_gaia(source_ids, phot_dir, **kwargs)
     else:
         raise ValueError(f"Unknown mode: {mode}")
 
@@ -88,21 +88,55 @@ def _read_ident_ogle(ident_fpath_list):
     df_ident = pd.concat(cat).reset_index(drop=True) if cat else pd.DataFrame(columns=ident_names)
     return df_ident, jobs
 
-def data_loader(ident_fpath, mode="ogle", ax_workers=12, chunk_size=200):
-    if (ident_fpath, str) or (ident_fpath, Path):
-        ident_fpath = [ident_fpath]
-    
-    source_ids = [int(x) for x in source_ids]
+# --------------------
+# Bulk loader
+# --------------------
+def _chunk_loader_threading(source_ids, phot_dir, mode, desc = None, 
+                            max_workers=12, chunk_size=200):
     nmax = len(source_ids)
     dl = {}
-
     with ThreadPoolExecutor(max_workers=max_workers) as executor:
         futures = []
         for i in range(0, nmax, chunk_size):
             batch_ids = source_ids[i:min(i + chunk_size, nmax)]
-            futures.append(executor.submit(_load_chunk, batch_ids, mode=mode))
-        for fut in tqdm(futures, desc=):
+            futures.append(executor.submit(_load_chunk, batch_ids, phot_dir, mode=mode))
+        for fut in tqdm(futures, desc=desc):
             dl.update(fut.result())
+    return dl
+
+def data_loader(ident_fpath, mode="ogle", max_workers=12, chunk_size=200):
+    if (ident_fpath, str) or (ident_fpath, Path):
+        ident_fpath = [ident_fpath]
+    # ---- OGLE ----
+    if mode == "ogle":
+        df_ident, jobs = _read_ident_ogle(ident_fpath)
+        dl = {}
+        for phot_dir, (cat_name, cat_ids) in zip(ident_fpath, jobs):
+            dl_cat = _chunk_loader_threading(
+                cat_ids,
+                phot_dir,
+                mode="ogle",
+                max_workers=max_workers,
+                chunk_size=chunk_size,
+                desc=f"{cat_name}")
+            dl.update(dl_cat)
+
+        return df_ident, dl
+
+    # ---- GAIA ----
+    elif: mode=="gaia":
+        df_ident = _read_ident_gaia(ls_ident)
+        source_ids = df_ident["SOURCE_ID"].astype(int).tolist()
+
+        dl = _chunk_loader_threading(
+            source_ids,
+            phot_dir=ident_fpath[0],
+            mode="gaia",
+            max_workers=max_workers,
+            chunk_size=max(chunk_size, 500),  # 파일 열기 위주라 크게 잡는 편이 효율적일 때 많음
+            desc="gaia_epoch_phot",
+        )
+    return df_ident, dl
 
 
 def wire_globals(decomp_mod, ls_data, df_ident):
