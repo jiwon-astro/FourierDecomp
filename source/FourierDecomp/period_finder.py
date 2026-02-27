@@ -72,7 +72,7 @@ def robust_period_search(t, mag, emag, bands,
     freqs, periods, delta_f = calc_fgrid(t, n0 = n0)
     
     cfg = get_data_config()
-    filters = cfg.activated_bands
+    filters = cfg.filters
     activated_bands = cfg.activated_bands
     bmask = [(bands==filters[ib]) for ib in activated_bands] # original definition: include all passbands?
 
