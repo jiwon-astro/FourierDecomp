@@ -275,12 +275,14 @@ def gaia_epoch_arrays(dl_dict, source_id, filters=("g", "bp", "rp"), monitor=Tru
     return (np.concatenate(t_all), np.concatenate(m_all), np.concatenate(e_all), np.concatenate(b_all))
 
 def ogle_epoch_arrays(data_dict, source_id, filters=("V","I"), monitor=True):
-    df = data_dict[source_id]
-    m = df["band"].isin(list(filters))
-    t = df.loc[m, phot_names[0]].to_numpy(dtype=float)
-    mag = df.loc[m, phot_names[1]].to_numpy(dtype=float)
-    emag = df.loc[m, phot_names[2]].to_numpy(dtype=float)
-    band = df.loc[m, "band"].to_numpy(dtype=object)
+    tbl = data_dict[source_id]
+    # band validity
+    m = np.isin(tbl["band"], filters)
+    # extract columns
+    t    = np.asarray(tbl[phot_names[0]][m], dtype=float)
+    mag  = np.asarray(tbl[phot_names[1]][m], dtype=float)
+    emag = np.asarray(tbl[phot_names[2]][m], dtype=float)
+    band = np.asarray(tbl["band"][m], dtype=object)
     if monitor:
         flts, n_phots = np.unique(band, return_counts=True)
         print(f'{source_id}')
@@ -310,7 +312,6 @@ def epoch_arrays(data_dict, source_id, mode = None, filters=None, monitor=False)
     
     if filters is None:
         filters = cfg.filters.tolist()
-    print(filters)
 
     if mode == "ogle":
         return ogle_epoch_arrays(data_dict, source_id, filters=filters, monitor=monitor)

@@ -1,25 +1,68 @@
-from multiprocessing import Pool, Lock, Manager
+import importlib
+from multiprocessing import Pool, Lock, Manager, get_context
 from tqdm.notebook import tqdm
 import csv
 
 from .params import M_MAX, period_fit
+from .IO import get_data_config
 
-columns = ['ID','pulsation', 'N_I','sig_I','rms_Ires',
-           'Zmax','P(LS)','chi2','P','E','phi_rise', 'M_fit', # <-- M_fit 컬럼 추가
-           'I0','Amp_I']+\
-[f'A{i}' for i in range(1, M_MAX + 1)] + [f'Q{i}' for i in range(1, M_MAX + 1)] + ['flag']
+# --- dynamic header based on activated bands ---
+def _build_fd_header(mode: str | None = None) -> list[str]:
+    """
+    Build output header for Fourier decomposition using only activated bands.
+    Output row format must match decomposition.fourier_decomp().
 
-def thread_run(fd_output, decomp_mod, ids, period_fit = period_fit, 
+    Expected row layout (as in decomposition.fourier_decomp):
+      [sid, pulsation, *N, *sig, *rms, Zmax, P0, chi2, P, E, phi_rise, M_fit, *theta_params_out, flag]
+    where:
+      N/sig/rms are per activated band
+      theta_params_out = [*m0, *amp, *A(1..M_MAX), *Q(1..M_MAX)]
+        but only for activated bands in m0/amp
+    """
+    cfg = get_data_config(mode)
+    active_idx = list(cfg.activated_bands)
+    active_filters = [str(cfg.filters[i]) for i in active_idx]
+
+    cols = []
+    cols += ["ID", "pulsation"]
+
+    # Per-band stats (only activated bands)
+    cols += [f"N_{b}" for b in active_filters]
+    cols += [f"sig_{b}" for b in active_filters]
+    cols += [f"rms_{b}" for b in active_filters]
+
+    # Period / fit summary
+    cols += ["Zmax", "P0", "chi2", "P", "E", "phi_rise", "M_fit"]
+
+    # Theta params (match decomposition.py theta_params_out ordering)
+    cols += [f"m0_{b}" for b in active_filters]
+    cols += [f"amp_{b}" for b in active_filters]
+
+    # Fourier series params
+    cols += [f"A{j}" for j in range(1, M_MAX + 1)]
+    cols += [f"Q{j}" for j in range(1, M_MAX + 1)]
+
+    cols += ["flag"]
+    return cols
+
+def _init_worker(ls_data, df_ident):
+    """Runs once per worker process."""
+    from . import decomposition as decomp_mod 
+    decomp_mod.ls_data = ls_data
+    decomp_mod.df_ident = df_ident
+
+def thread_run(fd_output, ids, period_fit = period_fit, 
                max_workers = 8):
     """
     Run decomposition.fourier_decomp(sid, ...) over many IDs with threads.
     Returns: list of result rows (one per successful sid).
     """
-    fourier_decomp = decomp_mod.fourier_decomp
-    
+    from . import decomposition as decomp_mod
+
     if not fd_output.exists():
         with open(fd_output, 'w', newline='') as f:
             writer = csv.writer(f, delimiter=' ')
+            columns = _build_fd_header()
             writer.writerow(columns)
 
     # pool
@@ -38,11 +81,14 @@ def thread_run(fd_output, decomp_mod, ids, period_fit = period_fit,
     pbar = tqdm(total = len(ids), desc = 'Fourier Decomposition', position = 0)
 
     # multiprocessing
-    pool = Pool(processes = max_workers)
+    ctx = get_context("spawn")
+    pool = ctx.Pool(processes = max_workers,
+                    initializer=_init_worker,
+                    initargs=(decomp_mod.ls_data, decomp_mod.df_ident))
     try:
         # asychronous processing
         for sid in ids:
-            pool.apply_async(fourier_decomp, args = (sid, period_fit,),
+            pool.apply_async(decomp_mod.fourier_decomp, args = (sid, period_fit,),
                             callback = callback)
         pool.close()
         pool.join() # close / return pool to os

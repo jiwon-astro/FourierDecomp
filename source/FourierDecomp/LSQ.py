@@ -5,7 +5,7 @@ from scipy.optimize import minimize
 from scipy.linalg import lstsq, norm
 from sklearn.linear_model import Lasso
 
-from .params import M_MAX, ERR_FLOOR, Amin, Amax, activated_bands, n_bands
+from .params import M_MAX, ERR_FLOOR, Amin, Amax
 
 # === Design matrix for Fourier series ===
 def cs_matrix(t, P, E, M_fit):
@@ -145,9 +145,10 @@ def chisq_single(theta, t, mag, emag, M_fit, P0=False, include_amp=True, unpack=
     resid = (mag - fval) / (np.maximum(emag, ERR_FLOOR))
     return np.sum(resid**2)
 
-def chisq(theta, t, mag, emag, bmask, M_fit, n_dim): # M_fit, n_dim 
+def chisq(theta, t, mag, emag, bmask, M_fit, n_dim, activated_bands): # M_fit, n_dim 
     summ = 0
     Nx = 0
+    n_bands = len(activated_bands)
     m0, amp0, A, Q, P, E = unpack_theta(theta, n_bands, M_fit=M_fit, include_amp=True)
     for i, ib in enumerate(activated_bands):
         theta_b = [m0[i], amp0[i], A, Q, P, E]
@@ -160,8 +161,11 @@ def chisq(theta, t, mag, emag, bmask, M_fit, n_dim): # M_fit, n_dim
     return summ / dof # Reduced chi-square
 
 # === LSQ fits ===
-def LSQ_fit(P0, args, M_fit, opt_method = 'lsq', bounds=None,
-                phase_flag=None, Nmin=50, lam=1e-3): # M_fit
+def LSQ_fit(P0, args, M_fit, activated_bands, opt_method = 'lsq',
+             bounds=None, phase_flag=None, Nmin=50, lam=1e-3): # M_fit
+    
+    n_bands = len(activated_bands)
+    
     t, mag, emag, bmask = args
     m0 = np.zeros(n_bands)
     amp0 = np.zeros(n_bands)

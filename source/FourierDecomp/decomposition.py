@@ -19,15 +19,16 @@ def bic(reduced_chi2, N, k):
     chi2 = reduced_chi2 * dof
     return chi2 + k * np.log(max(N, 1))
 
-def _fit_wrapper(P0, args, M_fit, n_bands, bounds_full, phase_flag, period_fit = False):
+def _fit_wrapper(P0, args, M_fit, bounds_full, activated_bands, phase_flag, period_fit = False):
     """
     Auxilary function to minimize objective function for given (P, M_fit)
     """
     t, mag, emag, bmask = args
+    n_bands = len(activated_bands)
     n_dim = 2 * n_bands + 2 * M_fit + 2 # n_dim 
     
     # initial parameter
-    theta0 = LSQ_fit(P0, args, M_fit, phase_flag=phase_flag, opt_method = opt_method, lam = lam)
+    theta0 = LSQ_fit(P0, args, M_fit, activated_bands, phase_flag=phase_flag, opt_method = opt_method, lam = lam)
     
     if period_fit:
         # P와 E의 bound를 theta0
@@ -37,7 +38,7 @@ def _fit_wrapper(P0, args, M_fit, n_bands, bounds_full, phase_flag, period_fit =
 
         # 2. Global minimization
         res = minimize(chisq, theta0,
-                       args=(t, mag, emag, bmask, M_fit, n_dim),
+                       args=(t, mag, emag, bmask, M_fit, n_dim, activated_bands),
                        method='L-BFGS-B',
                        bounds=bounds_full)
 
@@ -48,7 +49,7 @@ def _fit_wrapper(P0, args, M_fit, n_bands, bounds_full, phase_flag, period_fit =
         
     if flag:
         # optimization failure
-        chi2_init = chisq(theta0, *args, M_fit=M_fit, n_dim=n_dim)
+        chi2_init = chisq(theta0, *args, M_fit=M_fit, n_dim=n_dim, activated_bands=activated_bands)
         return theta0, chi2_init #, M_fit, n_dim
 
 # === Main Function ===
@@ -98,7 +99,7 @@ def fourier_decomp(sid, period_fit=False, verbose=False, plot_LS = False,
         #if Zi<0.2*Zmax: continue # non significant component
         # phase filling check
         phase_flag_i = np.array([phase_gap_exceeds(t[mask], Pi, M_fit=M_MAX) for mask in bmask])
-        theta_1_tmp, chi2_1_tmp = _fit_wrapper(Pi, args, M_fit_1, n_bands, bounds_1, 
+        theta_1_tmp, chi2_1_tmp = _fit_wrapper(Pi, args, M_fit_1, bounds_1, activated_bands,
                                                phase_flag = phase_flag_i, period_fit= False)
         if verbose:
             print(f"{Pi:.4f} days / chi2 = {chi2_1_tmp:.4f}")
@@ -139,7 +140,7 @@ def fourier_decomp(sid, period_fit=False, verbose=False, plot_LS = False,
     # slicing 
     bounds_2 = m_bounds + a_bounds + A_bounds_max[:M_fit_2] + Q_bounds_max[:M_fit_2] + P_bounds + E_bounds
     
-    theta_opt_2, chi2_opt_2 = _fit_wrapper(P0, args, M_fit_2, n_bands, bounds_2,
+    theta_opt_2, chi2_opt_2 = _fit_wrapper(P0, args, M_fit_2, bounds_2, activated_bands,
                                            phase_flag = phase_flag, period_fit= period_fit)
 
     # 2nd fitting is better than 1st fitting
