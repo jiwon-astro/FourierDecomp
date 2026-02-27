@@ -7,7 +7,7 @@ from .params import M_MAX, period_fit
 from .IO import get_data_config
 
 # --- dynamic header based on activated bands ---
-def _build_fd_header(mode: str | None = None) -> list[str]:
+def _build_fd_header(mode = None):
     """
     Build output header for Fourier decomposition using only activated bands.
     Output row format must match decomposition.fourier_decomp().
