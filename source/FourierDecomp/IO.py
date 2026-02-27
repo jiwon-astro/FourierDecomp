@@ -8,17 +8,9 @@ from concurrent.futures import ThreadPoolExecutor  # Threading
 from pathlib import Path
 from astropy.table import Table, vstack
 
-from .params import data_class, filters, prefixs, prefixs
-
 # ============================================================================
 # data configuration
 # ============================================================================
-
-# IO.py에 추가
-
-from dataclasses import dataclass
-from typing import Optional, Dict, Any
-import numpy as np
 
 @dataclass(frozen=True)
 class DataConfig:
@@ -38,19 +30,22 @@ def get_data_config(mode: Optional[str] = None) -> DataConfig:
       - None: params.data_class
       - 'ogle' or 'gaia'
     """
-    from . import params as P  # 런타임에 읽어오면 (노트북에서 params 수정 후) 반영이 쉬움
+    from .params import mode_default, DATA_CONFIGS  # 런타임에 읽어오면 (노트북에서 params 수정 후) 반영이 쉬움
+    
+    if mode is None: mode = mode_default
+    mode = mode.lower().strip()
+    base = DATA_CONFIGS[mode]
 
-    mode = (mode or P.mode).lower().strip()
     if mode not in ("ogle", "gaia"):
         raise ValueError(f"Unknown data_class/mode: {mode}")
 
-    flt = np.array(P.filters, dtype=object)
-    pfx = np.array(P.prefixs, dtype=int)
-    act = np.array(P.activated_bands, dtype=int)
+    flt = np.array(base['filters'], dtype=object)
+    pfx = np.array(base['prefixs'], dtype=int)
+    act = np.array(base['activated_bands'], dtype=int)
     n_b = len(act)
 
-    colors = list(P.lc_colors)
-    markers = list(P.lc_markers)
+    colors = list(base['lc_colors'])
+    markers = list(base['lc_markers'])
 
     return DataConfig(
         mode=mode,
@@ -192,10 +187,10 @@ def data_loader(ident_fpath, phot_dir, mode=None, max_workers=12, chunk_size=200
     return df_ident, dl
 
 
-def wire_globals(decomp_mod, ls_data, df_ident):
-    """Attach globals into `decomposition` module namespace."""
-    decomp_mod.ls_data = ls_data
-    decomp_mod.df_ident = df_ident
+def wire_globals(module, ls_data, df_ident):
+    """Attach globals into given module namespace."""
+    module.ls_data = ls_data
+    module.df_ident = df_ident
 
 # =============================================================================
 # Gaia epoch photometry support (DR3 ECSV)
@@ -264,11 +259,11 @@ def extract_gaia_band_data(dl_dict, source_id, band, monitor=True):
     return time.astype(float), np.asarray(mag, dtype=float), np.asarray(mag_err, dtype=float)
 
 
-def gaia_epoch_arrays(dl_dict, source_id, filters=("g", "bp", "rp")):
+def gaia_epoch_arrays(dl_dict, source_id, filters=("g", "bp", "rp"), monitor=True):
     """Return concatenated arrays t, mag, emag, band_label for FourierDecomp compatibility."""
     t_all, m_all, e_all, b_all = [], [], [], []
     for b in filters:
-        t, m, e = extract_gaia_band_data(dl_dict, source_id, b)
+        t, m, e = extract_gaia_band_data(dl_dict, source_id, b, monitor=monitor)
         if len(t) == 0:
             continue
         t_all.append(t)
@@ -279,20 +274,25 @@ def gaia_epoch_arrays(dl_dict, source_id, filters=("g", "bp", "rp")):
         return np.array([]), np.array([]), np.array([]), np.array([])
     return (np.concatenate(t_all), np.concatenate(m_all), np.concatenate(e_all), np.concatenate(b_all))
 
-def ogle_epoch_arrays(data_dict, source_id, filters=("V","I")):
+def ogle_epoch_arrays(data_dict, source_id, filters=("V","I"), monitor=True):
     df = data_dict[source_id]
     m = df["band"].isin(list(filters))
     t = df.loc[m, phot_names[0]].to_numpy(dtype=float)
     mag = df.loc[m, phot_names[1]].to_numpy(dtype=float)
     emag = df.loc[m, phot_names[2]].to_numpy(dtype=float)
     band = df.loc[m, "band"].to_numpy(dtype=object)
+    if monitor:
+        flts, n_phots = np.unique(band, return_counts=True)
+        print(f'{source_id}')
+        for flt, n_phot in zip(flts,n_phots):
+            print(f'{flt} / {n_phot} epochs')
     return t, mag, emag, band
 
 # =============================================================================
 # unified epoch array getter for downstream code
 # =============================================================================
 
-def epoch_arrays(data_dict, source_id, mode = None, filters=None):
+def epoch_arrays(data_dict, source_id, mode = None, filters=None, monitor=False):
     """
     Unified accessor to get (t, mag, emag, band) arrays for a given source_id.
 
@@ -310,11 +310,12 @@ def epoch_arrays(data_dict, source_id, mode = None, filters=None):
     
     if filters is None:
         filters = cfg.filters.tolist()
+    print(filters)
 
     if mode == "ogle":
-        return ogle_epoch_arrays(data_dict, source_id, filters=filters)
+        return ogle_epoch_arrays(data_dict, source_id, filters=filters, monitor=monitor)
     elif mode == "gaia":
-        return gaia_epoch_arrays(data_dict, int(source_id), filters=filters)
+        return gaia_epoch_arrays(data_dict, int(source_id), filters=filters, monitor=monitor)
 
     raise ValueError("mode must be 'ogle' or 'gaia'")
 

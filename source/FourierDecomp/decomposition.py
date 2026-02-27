@@ -7,7 +7,7 @@ from gatspy import periodic # multiband lomb-scargle
 
 from .params import M_MAX, M_MIN, THRESHOLD, Amin, Amax, pmin, pmax, n0, K, harmonics, snr, opt_method, lam
 from .LC import phase_gap_exceeds
-from .IO import phot_names, epoch_arrays, get_data_config
+from .IO import epoch_arrays, get_data_config 
 from .LSQ import LSQ_fit, chisq, chisq_single, unpack_theta
 from .period_finder import robust_period_search
 
@@ -19,7 +19,7 @@ def bic(reduced_chi2, N, k):
     chi2 = reduced_chi2 * dof
     return chi2 + k * np.log(max(N, 1))
 
-def _fit_wrapper(P0, args, M_fit, bounds_full, phase_flag, period_fit = False):
+def _fit_wrapper(P0, args, M_fit, n_bands, bounds_full, phase_flag, period_fit = False):
     """
     Auxilary function to minimize objective function for given (P, M_fit)
     """
@@ -61,9 +61,8 @@ def fourier_decomp(sid, period_fit=False, verbose=False, plot_LS = False,
     cfg = get_data_config(mode)
     filters = cfg.filters; activated_bands = cfg.activated_bands; n_bands = cfg.n_bands
 
-    data = epoch_arrays(ls_data, sid, mode=mode)
-
-    t, mag, emag, bands = [data[key].values for key in [*phot_names, 'band']]
+    t, mag, emag, bands = epoch_arrays(ls_data, sid, mode=mode)
+    #t, mag, emag, bands = [data[key].values for key in [*phot_names, 'band']]
     bmask = [(bands == band) for band in filters]
 
     # ======================================
@@ -99,7 +98,7 @@ def fourier_decomp(sid, period_fit=False, verbose=False, plot_LS = False,
         #if Zi<0.2*Zmax: continue # non significant component
         # phase filling check
         phase_flag_i = np.array([phase_gap_exceeds(t[mask], Pi, M_fit=M_MAX) for mask in bmask])
-        theta_1_tmp, chi2_1_tmp = _fit_wrapper(Pi, args, M_fit_1, bounds_1, 
+        theta_1_tmp, chi2_1_tmp = _fit_wrapper(Pi, args, M_fit_1, n_bands, bounds_1, 
                                                phase_flag = phase_flag_i, period_fit= False)
         if verbose:
             print(f"{Pi:.4f} days / chi2 = {chi2_1_tmp:.4f}")
@@ -140,7 +139,7 @@ def fourier_decomp(sid, period_fit=False, verbose=False, plot_LS = False,
     # slicing 
     bounds_2 = m_bounds + a_bounds + A_bounds_max[:M_fit_2] + Q_bounds_max[:M_fit_2] + P_bounds + E_bounds
     
-    theta_opt_2, chi2_opt_2 = _fit_wrapper(P0, args, M_fit_2, bounds_2,
+    theta_opt_2, chi2_opt_2 = _fit_wrapper(P0, args, M_fit_2, n_bands, bounds_2,
                                            phase_flag = phase_flag, period_fit= period_fit)
 
     # 2nd fitting is better than 1st fitting

@@ -61,24 +61,25 @@ def set_ylim(y,yerr,amp=1):
     yscale=0.25*abs(amp)
     return ymax+yscale, ymin-yscale
 
-# plot light curve
+# plot lig ht curve
 def plot_lc(sid, P0, mode='ogle', selected_filters = ['I'], phase_max = 2):
     cfg = get_data_config(mode)
     filters = cfg.filters
+    prefixs = cfg.prefixs
     lc_colors = cfg.lc_colors
     lc_markers = cfg.lc_markers
-
+    
     n_bands = len(selected_filters)
-    data = epoch_arrays(ls_data, sid, mode=mode)
-    t, mag, emag, bands = [data[key].values for key in [*phot_names,'band']]
+    t, mag, emag, bands = epoch_arrays(ls_data, sid, mode=mode, monitor=False)
+    #t, mag, emag, bands = [data[key].values for key in [*phot_names,'band']]
     bmask = [(bands==band) for band in selected_filters]
-
+    
     fig, ax = plt.subplots(n_bands,1,figsize=(10,3*n_bands),dpi=300)
     if n_bands == 1: ax = [ax]
     ax[0].set_title(f'{sid}',loc='left',fontsize = 18)
     
     for i, band in enumerate(selected_filters):
-        mask = bmask[i]; ib = prefixs[bands == band][0] # from filter catalog
+        mask = bmask[i]; ib = prefixs[filters == band][0] # from filter catalog
         t_ft, mag_ft, emag_ft = t[mask], mag[mask], emag[mask]
         if len(t_ft)==0: continue
         ext_phase, ext_mag, ext_emag = expand_light_curve(t_ft, mag_ft, emag_ft, P0, phase_range = (0, phase_max))

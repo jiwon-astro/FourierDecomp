@@ -1,22 +1,23 @@
 import numpy as np
 
-# --- LC photometric bands ----
-data_class = 'ogle'
-if data_class == 'ogle':
-    filters = np.array(['V','I'])
-    prefixs = np.array([0, 1])
-    lc_colors = ['yellowgreen','orange']
-    lc_markers = ['o','s']
-    activated_bands = [1] # in prefixs
-
-elif data_class == 'gaia':
-    filters = np.array(['g','bp','rp'])
-    prefixs = np.array([0, 1, 2])
-    colors = ['#000000','#0343DF','#E50000']
-    markers = ['o','s','D']
-    activated_bands = [0,1,2] # in prefixs
-
-n_bands = len(activated_bands)
+# --- mode specific defaults ----
+mode_default = 'ogle'
+DATA_CONFIGS = {
+    'ogle': {
+        'filters': np.array(['V', 'I']),
+        'prefixs': np.array([0, 1]),
+        'lc_colors': ['yellowgreen', 'orange'],
+        'lc_markers': ['o', 's'],
+        'activated_bands': [1],  # indices in prefixs
+    },
+    'gaia': {
+        'filters': np.array(['g', 'bp', 'rp']),
+        'prefixs': np.array([0, 1, 2]),
+        'lc_colors': ['#000000', '#0343DF', '#E50000'],
+        'lc_markers': ['o', 's', 'D'],
+        'activated_bands': [0, 1, 2],  # indices in prefixs
+    },
+}
 
 # --- fourier series ---
 M_MIN = 3   # minimum Fourier series order
