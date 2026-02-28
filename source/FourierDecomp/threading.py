@@ -3,7 +3,7 @@ from multiprocessing import Pool, Lock, Manager, get_context
 from tqdm.notebook import tqdm
 import csv
 
-from .params import M_MAX, period_fit
+from .params import period_fit
 from .IO import get_data_config
 
 # --- dynamic header based on activated bands ---
@@ -19,6 +19,8 @@ def _build_fd_header(mode = None):
       theta_params_out = [*m0, *amp, *A(1..M_MAX), *Q(1..M_MAX)]
         but only for activated bands in m0/amp
     """
+    from .params import M_MAX
+
     cfg = get_data_config(mode)
     active_idx = list(cfg.activated_bands)
     active_filters = [str(cfg.filters[i]) for i in active_idx]
