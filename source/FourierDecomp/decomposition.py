@@ -32,19 +32,15 @@ def _fit_wrapper(P0, args, M_fit, bounds_full, activated_bands, phase_flag,
     
     # initial parameter
     if theta0 is None:
-        theta0 = LSQ_fit(P0, args, M_fit, activated_bands, phase_flag=phase_flag, opt_method = opt_method, lam = lam)
-    else:
-        m0, amp, A, Q, P_init, E_init = unpack_theta(theta0, n_bands, M_fit=M_fit, include_amp=True)
-        theta0 = np.hstack([m0, amp, A, Q, P_init, E_init])
+        theta0 = LSQ_fit(P0, args, M_fit, activated_bands, phase_flag=phase_flag, 
+                         opt_method = opt_method, lam = lam)
 
     P_init, E_init = theta0[-2], theta0[-1]
     if period_fit:
         # P와 E의 bound를 theta0
         bounds_full[-2] = (max(P_init * 0.9, pmin), min(P_init * 1.1, pmax)) # P 범위
-        bounds_full[-1] = (E_init - P_init, E_init + P_init)     # E 범위
-    else:
-        bounds_full[-2] = (P_init, P_init)
-        bounds_full[-1] = (E_init, E_init)
+    else: bounds_full[-2] = (P_init, P_init)
+    bounds_full[-1] = (E_init - P_init, E_init + P_init)     # E 범위
 
     # 2. Global minimization
     if use_optim:
