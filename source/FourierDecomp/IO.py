@@ -187,10 +187,14 @@ def data_loader(ident_fpath, phot_dir, mode=None, max_workers=12, chunk_size=200
     return df_ident, dl
 
 
-def wire_globals(module, ls_data, df_ident):
+def wire_globals(module, ls_data, df_ident, 
+                 df_rrfit = None, templates = None):
     """Attach globals into given module namespace."""
     module.ls_data = ls_data
     module.df_ident = df_ident
+    module.df_rrfit = df_rrfit
+    module.templates = templates
+
 
 # =============================================================================
 # Gaia epoch photometry support (DR3 ECSV)

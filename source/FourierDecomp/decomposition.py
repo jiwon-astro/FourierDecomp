@@ -89,11 +89,11 @@ def calculate_m0_amp(args, sigma = 3.0, maxiter = 5):
 
 # === Main Function ===
 def fourier_decomp(sid, period_fit=False, verbose=False, plot_LS=False,
-                  K=K, harmonics=harmonics, mode='ogle',
-                  init='lsq', fit_row=None, templates=None):
+                  K=K, harmonics=harmonics, mode='ogle', init='lsq'):
     # Load data
-    pulsation = df_ident[df_ident['ID'] == sid]['pulsation'].values[0]
-    
+    sid_mask = (df_ident['ID'] == sid)
+    pulsation = df_ident[sid_mask]['pulsation'].values[0]
+
     if mode is None: mode = get_data_config().mode
     cfg = get_data_config(mode)
     filters = cfg.filters; activated_bands = cfg.activated_bands; n_bands = cfg.n_bands
@@ -107,10 +107,12 @@ def fourier_decomp(sid, period_fit=False, verbose=False, plot_LS=False,
     # =====================================
     theta0_rrfit = None
     if init == 'rrfit':
-        if fit_row is None:
-            raise ValueError("init='rrfit' requires fit_row (single row).")
-        if templates:
+        if df_rrfit is None:
+            raise ValueError("init='rrfit' requires rrfit result file.")
+        if templates is None:
             raise ValueError("init='rrfit' requires templates dict (A/Q).")
+        sid_mask = (df_rrfit['ID'] == sid)
+        fit_row = df_rrfit[sid_mask]
         P0 = float(fit_row['P'])
         E0 = float(fit_row['EPOCH'])
         T_idx = int(fit_row['T'])
