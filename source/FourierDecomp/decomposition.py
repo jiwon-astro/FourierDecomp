@@ -78,7 +78,8 @@ def calculate_m0_amp(args, sigma = 3.0, maxiter = 5):
         for _ in range(maxiter):
             resmask = sigma_clip(mag_ft - m0_ft, sigma=sigma, masked=True).mask
             m0_ft = np.average(mag_ft[~resmask], weights = w_ft[~resmask])
-            Amp_ft = max(mag_ft[~resmask]) - min(mag_ft[~resmask])
+            Amp_ft = np.diff(np.percentile(mag_ft[~resmask], [95,5])) 
+            #Amp_ft = max(mag_ft[~resmask]) - min(mag_ft[~resmask])
             n_curr = (~resmask).sum()
             if n_curr<n_prev: n_prev = n_curr
             else: break
@@ -157,7 +158,6 @@ def fourier_decomp(sid, period_fit=False, use_optim=False, verbose=False, plot_L
     # _fit_wrapper: return = (theta0, chi2)
     chi2_opt_1 = np.inf
     P0 = pmax
-    print(P0, P0s)
     for Pi, Zi in zip(P0s, Zs):
         #if Zi<0.2*Zmax: continue # non significant component
         # phase filling check
