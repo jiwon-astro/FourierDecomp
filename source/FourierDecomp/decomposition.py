@@ -3,6 +3,8 @@ import numpy as np
 from scipy.signal import find_peaks
 from scipy.optimize import minimize
 
+from astropy.stats import sigma_clip
+
 from gatspy import periodic # multiband lomb-scargle
 
 from .params import M_MAX, M_MIN, THRESHOLD, Amin, Amax, pmin, pmax, n0, K, harmonics, snr, opt_method, lam
@@ -19,7 +21,8 @@ def bic(reduced_chi2, N, k):
     chi2 = reduced_chi2 * dof
     return chi2 + k * np.log(max(N, 1))
 
-def _fit_wrapper(P0, args, M_fit, bounds_full, activated_bands, phase_flag, period_fit = False):
+def _fit_wrapper(P0, args, M_fit, bounds_full, activated_bands, phase_flag, 
+                 period_fit = False, theta0 = None):
     """
     Auxilary function to minimize objective function for given (P, M_fit)
     """
@@ -28,8 +31,9 @@ def _fit_wrapper(P0, args, M_fit, bounds_full, activated_bands, phase_flag, peri
     n_dim = 2 * n_bands + 2 * M_fit + 2 # n_dim 
     
     # initial parameter
-    theta0 = LSQ_fit(P0, args, M_fit, activated_bands, phase_flag=phase_flag, opt_method = opt_method, lam = lam)
-    
+    if theta0 is None:
+        theta0 = LSQ_fit(P0, args, M_fit, activated_bands, phase_flag=phase_flag, opt_method = opt_method, lam = lam)
+
     if period_fit:
         # P와 E의 bound를 theta0
         P_init, E_init = theta0[-2], theta0[-1]
@@ -52,9 +56,41 @@ def _fit_wrapper(P0, args, M_fit, bounds_full, activated_bands, phase_flag, peri
         chi2_init = chisq(theta0, *args, M_fit=M_fit, n_dim=n_dim, activated_bands=activated_bands)
         return theta0, chi2_init #, M_fit, n_dim
 
+
+def _build_bounds(n_bands, M_fit):
+    m_bounds = [(-np.inf, np.inf)] * n_bands
+    a_bounds = [(Amin, Amax)] * n_bands
+    A_bounds = [(Amin, Amax)] * M_fit
+    Q_bounds = [(0, 2 * np.pi)] * M_fit
+    P_bounds = [(pmin, pmax)] # (임시)
+    E_bounds = [(-np.inf, np.inf)] # (임시)
+    return m_bounds + a_bounds + A_bounds + Q_bounds + P_bounds + E_bounds
+
+def calculate_m0_amp(args, sigma = 3.0, maxiter = 5):
+    # calculate 1) mean magnitude and 2) peak-to-peak amplitude from multi-band epoch photometry
+    # using for initial guess 
+    t, mag, emag, bmask = args
+    n_bands = len(bmask)
+    m0s = np.zeros(n_bands); A0s = np.zeros(n_bands)
+    for i, m in enumerate(bmask):
+        mag_ft, emag_ft = mag[m], emag[m]
+        w_ft = 1/emag_ft**2
+        n_prev = len(mag_ft)
+        m0_ft = np.average(mag_ft, weights = w_ft)
+        for _ in range(maxiter):
+            resmask = sigma_clip(mag_ft - m0_ft, sigma=sigma, masked=True).mask
+            m0_ft = np.average(mag_ft[~resmask], weights = w_ft[~resmask])
+            Amp_ft = max(mag_ft[~resmask]) - min(mag_ft[~resmask])
+            n_curr = (~resmask).sum()
+            if n_curr<n_prev: n_prev = n_curr
+            else: break
+        m0s[i] = m0_ft; A0s[i] = Amp_ft
+    return m0s, A0s
+
 # === Main Function ===
-def fourier_decomp(sid, period_fit=False, verbose=False, plot_LS = False,
-                  K = K, harmonics = harmonics, mode='ogle'):
+def fourier_decomp(sid, period_fit=False, verbose=False, plot_LS=False,
+                  K=K, harmonics=harmonics, mode='ogle',
+                  init='lsq', fit_row=None, templates=None):
     # Load data
     pulsation = df_ident[df_ident['ID'] == sid]['pulsation'].values[0]
     
@@ -67,30 +103,49 @@ def fourier_decomp(sid, period_fit=False, verbose=False, plot_LS = False,
     bmask = [(bands == band) for band in filters]
 
     # ======================================
-    # 1) Lomb-Scargle - find initial period
+    # 1) initial period
     # =====================================
-    P0s, Zs = robust_period_search(t, mag, emag, bands, 
-                                   n0 = n0, K = K, harmonics = harmonics, 
-                                   snr = snr, plot = plot_LS)
-    Zmax = Zs.max()
-    if verbose: print(f'Lomb-Scargle Period = {P0s} / Z = {Zs}')
+    theta0_rrfit = None
+    if init == 'rrfit':
+        if fit_row is None:
+            raise ValueError("init='rrfit' requires fit_row (single row).")
+        if templates:
+            raise ValueError("init='rrfit' requires templates dict (A/Q).")
+        P0 = float(fit_row['P'])
+        E0 = float(fit_row['EPOCH'])
+        T_idx = int(fit_row['T'])
+        tmpl = templates[f'T{T_idx}']
+
+        m0s, A0s = calculate_m0_amp(args)
+        A_tmp = np.zeros(M_MAX); Q_tmp = np.zeros(M_MAX)
+        A_RRFIT = np.array(tmpl.A, dtype=float)
+        Q_RRFIT = np.array(tmpl.Q, dtype=float)
+        mlen = min(len(A_RRFIT), M_MAX)
+        A_tmp[:mlen] = A_RRFIT[:mlen]
+        Q_tmp[:mlen] = Q_RRFIT[:mlen]
+
+        theta0_rrfit = np.array([*m0s, *A0s, *A_tmp, *Q_tmp, P0, E0], dtype=float)
+        
+        P0s = np.array([P0])
+        Zs = np.array([np.nan])
+        Zmax = np.nan
+
+        if verbose: print(f'RRFit period = {P0:.4f}d / E = {E0:.4f}')
+    else:
+        P0s, Zs = robust_period_search(t, mag, emag, bands, 
+                                    n0 = n0, K = K, harmonics = harmonics, 
+                                    snr = snr, plot = plot_LS)
+        Zmax = Zs.max()
+        if verbose: print(f'Lomb-Scargle Period = {P0s} / Z = {Zs}')
     
     # =====================================
     # 2) Perform fitting
     # =====================================
     args = (t, mag, emag, bmask)
-    
-    # bounds (M_MAX)
-    m_bounds = [(-np.inf, np.inf)] * n_bands
-    a_bounds = [(Amin, Amax)] * n_bands
-    A_bounds_max = [(Amin, Amax)] * M_MAX
-    Q_bounds_max = [(0, 2 * np.pi)] * M_MAX
-    P_bounds = [(pmin, pmax)] # (임시)
-    E_bounds = [(-np.inf, np.inf)] # (임시)
 
     # --- 1st fit (M_MAX) ---
     M_fit_1 = M_MAX
-    bounds_1 = m_bounds + a_bounds + A_bounds_max + Q_bounds_max + P_bounds + E_bounds
+    bounds_1 = _build_bounds(n_bands, M_fit_1)
     
     # _fit_wrapper: return = (theta0, chi2)
     chi2_opt_1 = np.inf
@@ -99,8 +154,13 @@ def fourier_decomp(sid, period_fit=False, verbose=False, plot_LS = False,
         #if Zi<0.2*Zmax: continue # non significant component
         # phase filling check
         phase_flag_i = np.array([phase_gap_exceeds(t[mask], Pi, M_fit=M_MAX) for mask in bmask])
+        
+        theta_init = None
+        if init == 'rrfit':
+            theta_init = theta0_rrfit
+
         theta_1_tmp, chi2_1_tmp = _fit_wrapper(Pi, args, M_fit_1, bounds_1, activated_bands,
-                                               phase_flag = phase_flag_i, period_fit= False)
+                                               phase_flag = phase_flag_i, period_fit= False, theta0=theta_init)
         if verbose:
             print(f"{Pi:.4f} days / chi2 = {chi2_1_tmp:.4f}")
         if np.isfinite(chi2_1_tmp) and chi2_opt_1 > chi2_1_tmp: 
@@ -138,10 +198,10 @@ def fourier_decomp(sid, period_fit=False, verbose=False, plot_LS = False,
     M_fit_2 = M_trunc
 
     # slicing 
-    bounds_2 = m_bounds + a_bounds + A_bounds_max[:M_fit_2] + Q_bounds_max[:M_fit_2] + P_bounds + E_bounds
-    
+    bounds_2 = _build_bounds(n_bands, M_fit_2)
     theta_opt_2, chi2_opt_2 = _fit_wrapper(P0, args, M_fit_2, bounds_2, activated_bands,
-                                           phase_flag = phase_flag, period_fit= period_fit)
+                                           phase_flag = phase_flag, period_fit= period_fit,
+                                           theta0=(theta0_rrfit if init=='rrfit' else None))
 
     # 2nd fitting is better than 1st fitting
     if verbose:
