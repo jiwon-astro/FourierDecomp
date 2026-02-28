@@ -92,6 +92,8 @@ def reg_lsq_lasso(X, y, w, lam, beta_init):
 # === Vectorized Fourier Series === 
 def H(theta, t, M_fit = M_MAX):
     # A, Q : fourier coefficients (size M vector) 
+    if len(theta) != 2:
+        raise ValueError(f"F(): theta length={len(theta)} (expected 2)")
     A, Q = theta
     P = 1  # unit period
     phi = t / P % 1.0  # to make numerically stable
@@ -107,9 +109,7 @@ def F(theta, t, M_fit):
     # E : epoch 
     # A, Q : fourier coefficients (size M vector) 
     if len(theta) != 6:
-        print(theta)
         raise ValueError(f"F(): theta length={len(theta)} (expected 6)")
-    
     m0, amp0, A, Q, P, E = theta
     phi = (t - E) / P % 1.0  # to make numerically stable
     orders = 1 + np.arange(M_fit).reshape(-1, 1) # Fourier series order
@@ -142,13 +142,9 @@ def peak_to_peak_amplitude(A, Q, Nx=1001, M_fit=None): # M_fit
 def chisq_single(theta, t, mag, emag, M_fit, P0=False, include_amp=True, unpack=True): 
     if unpack:
         # convert into [m0, amp, A, Q, P, E]
-        print(f"[DEBUG] theta len={len(theta)} shape={getattr(theta,'shape',None)} dtype={getattr(theta,'dtype',None)}",
-      file=sys.stderr, flush=True)
         m0, amp, A, Q, P, E = unpack_theta(theta, n_bands=1, M_fit=M_fit,
                                            P=P0, include_amp=include_amp)
         theta = np.array([m0[0], amp[0], A, Q, P, E]) # assuming m0, A0, single value
-        print(f"[DEBUG] theta len={len(theta)} shape={getattr(theta,'shape',None)} dtype={getattr(theta,'dtype',None)}",
-      file=sys.stderr, flush=True)
     fval = F(theta, t, M_fit)
     resid = (mag - fval) / (np.maximum(emag, ERR_FLOOR))
     return np.sum(resid**2)
