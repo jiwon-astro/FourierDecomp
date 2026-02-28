@@ -91,12 +91,17 @@ def calculate_m0_amp(args, sigma = 3.0, maxiter = 5):
 def fourier_decomp(sid, period_fit=False, verbose=False, plot_LS=False,
                   K=K, harmonics=harmonics, mode='ogle', init='lsq'):
     # Load data
-    sid_mask = (df_ident['SOURCE_ID'] == sid)
-    pulsation = df_ident[sid_mask]['pulsation'].values[0]
-
     if mode is None: mode = get_data_config().mode
     cfg = get_data_config(mode)
     filters = cfg.filters; activated_bands = cfg.activated_bands; n_bands = cfg.n_bands
+
+    sid_mask = (df_ident['SOURCE_ID'] == sid)
+    if mode=='ogle':
+        pulsation = df_ident['pulsation'][sid_mask]
+    elif mode=='gaia':
+        cep_type = df_ident['type_best_classification'][sid_mask]
+        osc_type = df_ident['mode_best_classification'][sid_mask]
+        pulsation = f'{cep_type}_{osc_type}'
 
     t, mag, emag, bands = epoch_arrays(ls_data, sid, mode=mode)
     #t, mag, emag, bands = [data[key].values for key in [*phot_names, 'band']]
