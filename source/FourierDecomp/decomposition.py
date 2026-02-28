@@ -22,7 +22,7 @@ def bic(reduced_chi2, N, k):
     return chi2 + k * np.log(max(N, 1))
 
 def _fit_wrapper(P0, args, M_fit, bounds_full, activated_bands, phase_flag, 
-                 period_fit = False, theta0 = None):
+                 period_fit = False, theta0 = None, use_optim=False):
     """
     Auxilary function to minimize objective function for given (P, M_fit)
     """
@@ -31,30 +31,33 @@ def _fit_wrapper(P0, args, M_fit, bounds_full, activated_bands, phase_flag,
     n_dim = 2 * n_bands + 2 * M_fit + 2 # n_dim 
     
     # initial parameter
-    #if theta0 is None:
-    theta0 = LSQ_fit(P0, args, M_fit, activated_bands, phase_flag=phase_flag, opt_method = opt_method, lam = lam)
+    if theta0 is None:
+        theta0 = LSQ_fit(P0, args, M_fit, activated_bands, phase_flag=phase_flag, opt_method = opt_method, lam = lam)
+    else:
+        m0, amp, A, Q, P_init, E_init = unpack_theta(theta0, n_bands, M_fit=M_fit, include_amp=True)
+        theta0 = np.hstack([m0, amp, A, Q, P_init, E_init])
 
+    P_init, E_init = theta0[-2], theta0[-1]
     if period_fit:
         # P와 E의 bound를 theta0
-        P_init, E_init = theta0[-2], theta0[-1]
         bounds_full[-2] = (max(P_init * 0.9, pmin), min(P_init * 1.1, pmax)) # P 범위
         bounds_full[-1] = (E_init - P_init, E_init + P_init)     # E 범위
+    else:
+        bounds_full[-2] = (P_init, P_init)
+        bounds_full[-1] = (E_init, E_init)
 
-        # 2. Global minimization
+    # 2. Global minimization
+    if use_optim:
         res = minimize(chisq, theta0,
-                       args=(t, mag, emag, bmask, M_fit, n_dim, activated_bands),
-                       method='L-BFGS-B',
-                       bounds=bounds_full)
-
+                    args=(t, mag, emag, bmask, M_fit, n_dim, activated_bands),
+                    method='L-BFGS-B',
+                    bounds=bounds_full)
         if res.success:
             return res.x, res.fun #, M_fit, n_dim
-        else: flag = True
-    else: flag = True
         
-    if flag:
-        # optimization failure
-        chi2_init = chisq(theta0, *args, M_fit=M_fit, n_dim=n_dim, activated_bands=activated_bands)
-        return theta0, chi2_init #, M_fit, n_dim
+    # optimization failure
+    chi2_init = chisq(theta0, *args, M_fit=M_fit, n_dim=n_dim, activated_bands=activated_bands)
+    return theta0, chi2_init #, M_fit, n_dim
 
 
 def _build_bounds(n_bands, M_fit):
@@ -88,7 +91,7 @@ def calculate_m0_amp(args, sigma = 3.0, maxiter = 5):
     return m0s, A0s
 
 # === Main Function ===
-def fourier_decomp(sid, period_fit=False, verbose=False, plot_LS=False,
+def fourier_decomp(sid, period_fit=False, use_optim=False, verbose=False, plot_LS=False,
                   K=K, harmonics=harmonics, mode='ogle', init='lsq'):
     # Load data
     if mode is None: mode = get_data_config().mode
@@ -167,7 +170,8 @@ def fourier_decomp(sid, period_fit=False, verbose=False, plot_LS=False,
             theta_init = theta0_rrfit
 
         theta_1_tmp, chi2_1_tmp = _fit_wrapper(Pi, args, M_fit_1, bounds_1, activated_bands,
-                                               phase_flag = phase_flag_i, period_fit= False, theta0=theta_init)
+                                               phase_flag = phase_flag_i, period_fit=period_fit, use_optim=use_optim,
+                                               theta0=theta_init)
         if verbose:
             print(f"{Pi:.4f} days / chi2 = {chi2_1_tmp:.4f}")
         if np.isfinite(chi2_1_tmp) and chi2_opt_1 > chi2_1_tmp: 
@@ -207,7 +211,7 @@ def fourier_decomp(sid, period_fit=False, verbose=False, plot_LS=False,
     # slicing 
     bounds_2 = _build_bounds(n_bands, M_fit_2)
     theta_opt_2, chi2_opt_2 = _fit_wrapper(P0, args, M_fit_2, bounds_2, activated_bands,
-                                           phase_flag = phase_flag, period_fit= period_fit,
+                                           phase_flag = phase_flag, period_fit= period_fit, use_optim=use_optim,
                                            theta0=(theta0_rrfit if init=='rrfit' else None))
 
     # 2nd fitting is better than 1st fitting
