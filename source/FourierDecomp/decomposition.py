@@ -97,10 +97,10 @@ def fourier_decomp(sid, period_fit=False, verbose=False, plot_LS=False,
 
     sid_mask = (df_ident['SOURCE_ID'] == sid)
     if mode=='ogle':
-        pulsation = df_ident['pulsation'][sid_mask]
+        pulsation = df_ident['pulsation'][sid_mask][0]
     elif mode=='gaia':
-        cep_type = df_ident['type_best_classification'][sid_mask]
-        osc_type = df_ident['mode_best_classification'][sid_mask]
+        cep_type = df_ident['type_best_classification'][sid_mask][0]
+        osc_type = df_ident['mode_best_classification'][sid_mask][0]
         pulsation = f'{cep_type}_{osc_type}'
 
     t, mag, emag, bands = epoch_arrays(ls_data, sid, mode=mode)
