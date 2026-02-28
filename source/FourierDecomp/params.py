@@ -1,7 +1,7 @@
 import numpy as np
 
 # --- mode specific defaults ----
-mode_default = 'ogle'
+mode_default = 'gaia'
 DATA_CONFIGS = {
     'ogle': {
         'filters': np.array(['V', 'I']),
@@ -43,4 +43,4 @@ snr = 5 # relative peak strength for aliased frequency detection
 period_fit = False
 use_optim = True
 
-init = 'lsq' # lsq or rrfit
+init = 'rrfit' # lsq or rrfit
