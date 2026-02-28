@@ -96,7 +96,7 @@ def fourier_decomp(sid, period_fit=False, use_optim=False, verbose=False, plot_L
     
     if mode=='ogle':
         sid_mask = (df_ident['ID'] == sid)
-        pulsation = df_ident['pulsation'][sid_mask][0]
+        pulsation = df_ident['pulsation'][sid_mask]
     elif mode=='gaia':
         sid_mask = (df_ident['SOURCE_ID'] == sid)
         cep_type = df_ident['type_best_classification'][sid_mask][0]
