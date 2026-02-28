@@ -140,7 +140,7 @@ def chisq_single(theta, t, mag, emag, M_fit, P0=False, include_amp=True, unpack=
         # convert into [m0, amp, A, Q, P, E]
         m0, amp, A, Q, P, E = unpack_theta(theta, n_bands=1, M_fit=M_fit,
                                            P=P0, include_amp=include_amp)
-        theta = np.array([*m0, *amp, *A, *Q, P, E])
+        theta = np.array([*m0, *amp, A, Q, P, E])
     fval = F(theta, t, M_fit)
     resid = (mag - fval) / (np.maximum(emag, ERR_FLOOR))
     return np.sum(resid**2)
