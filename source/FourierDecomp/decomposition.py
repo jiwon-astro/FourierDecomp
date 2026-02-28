@@ -131,7 +131,7 @@ def fourier_decomp(sid, period_fit=False, use_optim=False, verbose=False, plot_L
         A_tmp[:mlen] = A_RRFIT[:mlen]
         Q_tmp[:mlen] = Q_RRFIT[:mlen]
 
-        theta0_rrfit = np.array([*m0s, *A0s, *A_tmp, *Q_tmp, P0, E0], dtype=float)
+        #theta0_rrfit = np.array([*m0s, *A0s, *A_tmp, *Q_tmp, P0, E0], dtype=float)
         
         P0s = np.array([P0])
         Zs = np.array([np.nan])
