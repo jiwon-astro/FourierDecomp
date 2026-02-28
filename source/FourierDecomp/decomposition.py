@@ -22,7 +22,7 @@ def bic(reduced_chi2, N, k):
     return chi2 + k * np.log(max(N, 1))
 
 def _fit_wrapper(P0, args, M_fit, bounds_full, activated_bands, phase_flag, 
-                 period_fit = False, theta0 = None, use_optim=False):
+                 period_fit = False, use_optim=False):
     """
     Auxilary function to minimize objective function for given (P, M_fit)
     """
@@ -31,9 +31,8 @@ def _fit_wrapper(P0, args, M_fit, bounds_full, activated_bands, phase_flag,
     n_dim = 2 * n_bands + 2 * M_fit + 2 # n_dim 
     
     # initial parameter
-    if theta0 is None:
-        theta0 = LSQ_fit(P0, args, M_fit, activated_bands, phase_flag=phase_flag, 
-                         opt_method = opt_method, lam = lam)
+    theta0 = LSQ_fit(P0, args, M_fit, activated_bands, phase_flag=phase_flag, 
+                        opt_method = opt_method, lam = lam)
 
     P_init, E_init = theta0[-2], theta0[-1]
     if period_fit:
@@ -94,10 +93,12 @@ def fourier_decomp(sid, period_fit=False, use_optim=False, verbose=False, plot_L
     cfg = get_data_config(mode)
     filters = cfg.filters; activated_bands = cfg.activated_bands; n_bands = cfg.n_bands
 
-    sid_mask = (df_ident['SOURCE_ID'] == sid)
+    
     if mode=='ogle':
+        sid_mask = (df_ident['ID'] == sid)
         pulsation = df_ident['pulsation'][sid_mask][0]
     elif mode=='gaia':
+        sid_mask = (df_ident['SOURCE_ID'] == sid)
         cep_type = df_ident['type_best_classification'][sid_mask][0]
         osc_type = df_ident['mode_best_classification'][sid_mask][0]
         pulsation = f'{cep_type}_{osc_type}'
@@ -156,18 +157,19 @@ def fourier_decomp(sid, period_fit=False, use_optim=False, verbose=False, plot_L
     # _fit_wrapper: return = (theta0, chi2)
     chi2_opt_1 = np.inf
     P0 = pmax
+    print(P0, P0s)
     for Pi, Zi in zip(P0s, Zs):
         #if Zi<0.2*Zmax: continue # non significant component
         # phase filling check
         phase_flag_i = np.array([phase_gap_exceeds(t[mask], Pi, M_fit=M_MAX) for mask in bmask])
         
+        """
         theta_init = None
-        if init == 'rrfit':
-            theta_init = theta0_rrfit
-
+        if init == 'rrfit': theta_init = theta0_rrfit
+        """
         theta_1_tmp, chi2_1_tmp = _fit_wrapper(Pi, args, M_fit_1, bounds_1, activated_bands,
-                                               phase_flag = phase_flag_i, period_fit=period_fit, use_optim=use_optim,
-                                               theta0=theta_init)
+                                               phase_flag = phase_flag_i, period_fit=period_fit, use_optim=use_optim)
+                                               #theta0=theta_init)
         if verbose:
             print(f"{Pi:.4f} days / chi2 = {chi2_1_tmp:.4f}")
         if np.isfinite(chi2_1_tmp) and chi2_opt_1 > chi2_1_tmp: 
@@ -207,8 +209,8 @@ def fourier_decomp(sid, period_fit=False, use_optim=False, verbose=False, plot_L
     # slicing 
     bounds_2 = _build_bounds(n_bands, M_fit_2)
     theta_opt_2, chi2_opt_2 = _fit_wrapper(P0, args, M_fit_2, bounds_2, activated_bands,
-                                           phase_flag = phase_flag, period_fit= period_fit, use_optim=use_optim,
-                                           theta0=(theta0_rrfit if init=='rrfit' else None))
+                                           phase_flag = phase_flag, period_fit= period_fit, use_optim=use_optim)
+                                           #theta0=(theta0_rrfit if init=='rrfit' else None))
 
     # 2nd fitting is better than 1st fitting
     if verbose:
