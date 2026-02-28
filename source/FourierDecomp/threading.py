@@ -4,48 +4,7 @@ from tqdm.notebook import tqdm
 import csv
 
 from .params import period_fit
-from .IO import get_data_config
-
-# --- dynamic header based on activated bands ---
-def _build_fd_header(mode = None):
-    """
-    Build output header for Fourier decomposition using only activated bands.
-    Output row format must match decomposition.fourier_decomp().
-
-    Expected row layout (as in decomposition.fourier_decomp):
-      [sid, pulsation, *N, *sig, *rms, Zmax, P0, chi2, P, E, phi_rise, M_fit, *theta_params_out, flag]
-    where:
-      N/sig/rms are per activated band
-      theta_params_out = [*m0, *amp, *A(1..M_MAX), *Q(1..M_MAX)]
-        but only for activated bands in m0/amp
-    """
-    from .params import M_MAX
-
-    cfg = get_data_config(mode)
-    active_idx = list(cfg.activated_bands)
-    active_filters = [str(cfg.filters[i]) for i in active_idx]
-
-    cols = []
-    cols += ["ID", "pulsation"]
-
-    # Per-band stats (only activated bands)
-    cols += [f"N_{b}" for b in active_filters]
-    cols += [f"sig_{b}" for b in active_filters]
-    cols += [f"rms_{b}" for b in active_filters]
-
-    # Period / fit summary
-    cols += ["Zmax", "P0", "chi2", "P", "E", "phi_rise", "M_fit"]
-
-    # Theta params (match decomposition.py theta_params_out ordering)
-    cols += [f"m0_{b}" for b in active_filters]
-    cols += [f"amp_{b}" for b in active_filters]
-
-    # Fourier series params
-    cols += [f"A{j}" for j in range(1, M_MAX + 1)]
-    cols += [f"Q{j}" for j in range(1, M_MAX + 1)]
-
-    cols += ["flag"]
-    return cols
+from .IO import get_data_config, _build_fd_header
 
 def _init_worker(ls_data, df_ident):
     """Runs once per worker process."""

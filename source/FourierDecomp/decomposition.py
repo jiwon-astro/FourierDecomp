@@ -157,7 +157,7 @@ def fourier_decomp(sid, period_fit=False, use_optim=False, verbose=False, plot_L
     
     # _fit_wrapper: return = (theta0, chi2)
     chi2_opt_1 = np.inf
-    P0 = pmax
+    P0 = pmax # initialize (best period)
     for Pi, Zi in zip(P0s, Zs):
         #if Zi<0.2*Zmax: continue # non significant component
         # phase filling check
