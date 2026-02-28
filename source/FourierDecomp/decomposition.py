@@ -91,7 +91,7 @@ def calculate_m0_amp(args, sigma = 3.0, maxiter = 5):
 def fourier_decomp(sid, period_fit=False, verbose=False, plot_LS=False,
                   K=K, harmonics=harmonics, mode='ogle', init='lsq'):
     # Load data
-    sid_mask = (df_ident['ID'] == sid)
+    sid_mask = (df_ident['SOURCE_ID'] == sid)
     pulsation = df_ident[sid_mask]['pulsation'].values[0]
 
     if mode is None: mode = get_data_config().mode
