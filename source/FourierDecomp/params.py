@@ -33,7 +33,7 @@ pmin, pmax = 0.2, 300 # [days]
 delta_P_tol = 0.0001 # [days] 
 
 opt_method = 'lasso'
-lam = 1e-4 # regularization coeff
+lam = 1e-2 # regularization coeff
 
 n0 = 2 # oversampling
 harmonics = 1 # maximum order of harmonics [P0, P0/n, n*P0]
@@ -41,3 +41,6 @@ K = 5 # peak search for aliasing cleaning
 snr = 5 # relative peak strength for aliased frequency detection
 
 period_fit = False
+use_optim = True
+
+init = 'lsq' # lsq or rrfit

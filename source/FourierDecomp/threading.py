@@ -3,7 +3,7 @@ from multiprocessing import Pool, Lock, Manager, get_context
 from tqdm.notebook import tqdm
 import csv
 
-from .params import period_fit
+from .params import period_fit, use_optim, mode_default, init
 from .IO import get_data_config, build_fd_header
 
 def _init_worker(ls_data, df_ident):
@@ -12,8 +12,8 @@ def _init_worker(ls_data, df_ident):
     decomp_mod.ls_data = ls_data
     decomp_mod.df_ident = df_ident
 
-def thread_run(fd_output, ids, period_fit = period_fit, 
-               max_workers = 8):
+def thread_run(fd_output, ids, period_fit = period_fit, use_optim = use_optim,  
+               mode = mode_default, init = init, max_workers = 8):
     """
     Run decomposition.fourier_decomp(sid, ...) over many IDs with threads.
     Returns: list of result rows (one per successful sid).

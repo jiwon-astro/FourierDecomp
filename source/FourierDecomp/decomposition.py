@@ -94,7 +94,6 @@ def fourier_decomp(sid, period_fit=False, use_optim=False, verbose=False, plot_L
     cfg = get_data_config(mode)
     filters = cfg.filters; activated_bands = cfg.activated_bands; n_bands = cfg.n_bands
 
-    
     if mode=='ogle':
         sid_mask = (df_ident['ID'] == sid)
         pulsation = df_ident[sid_mask]['pulsation'].values[0]
