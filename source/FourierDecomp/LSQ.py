@@ -140,7 +140,7 @@ def chisq_single(theta, t, mag, emag, M_fit, P0=False, include_amp=True, unpack=
         # convert into [m0, amp, A, Q, P, E]
         m0, amp, A, Q, P, E = unpack_theta(theta, n_bands=1, M_fit=M_fit,
                                            P=P0, include_amp=include_amp)
-        theta = np.array([m0[0], amp[0], A, Q, P, E]) # assuming m0, A0, single value
+        theta = np.array([*m0, *amp, *A, *Q, P, E]) # assuming m0, A0, single value
     fval = F(theta, t, M_fit)
     resid = (mag - fval) / (np.maximum(emag, ERR_FLOOR))
     return np.sum(resid**2)
@@ -202,7 +202,7 @@ def LSQ_fit(P0, args, M_fit, activated_bands, opt_method = 'lsq',
                 bounds_single = [(-np.inf, np.inf)] + [(Amin, Amax)] * M_fit + [(0, 2 * np.pi)] * M_fit + [(E0 - P0, E0 + P0)]
                 
                 res = minimize(chisq_single, theta_ft,
-                               args=(t_ft, mag_ft, emag_ft, M_fit, P0, False, True), 
+                               args=(t_ft, mag_ft, emag_ft, M_fit, P0, False, False), 
                                method='L-BFGS-B', bounds=bounds_single)
                 
                 if res.success:
