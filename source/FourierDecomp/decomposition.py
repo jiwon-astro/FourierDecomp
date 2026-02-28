@@ -106,6 +106,7 @@ def fourier_decomp(sid, period_fit=False, verbose=False, plot_LS=False,
     t, mag, emag, bands = epoch_arrays(ls_data, sid, mode=mode)
     #t, mag, emag, bands = [data[key].values for key in [*phot_names, 'band']]
     bmask = [(bands == band) for band in filters]
+    args = (t, mag, emag, bmask)
 
     # ======================================
     # 1) initial period
@@ -148,7 +149,6 @@ def fourier_decomp(sid, period_fit=False, verbose=False, plot_LS=False,
     # =====================================
     # 2) Perform fitting
     # =====================================
-    args = (t, mag, emag, bmask)
 
     # --- 1st fit (M_MAX) ---
     M_fit_1 = M_MAX
