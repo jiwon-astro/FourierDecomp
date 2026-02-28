@@ -34,21 +34,22 @@ def _fit_wrapper(P0, args, M_fit, bounds_full, activated_bands, phase_flag,
     if theta0 is None:
         theta0 = LSQ_fit(P0, args, M_fit, activated_bands, phase_flag=phase_flag, opt_method = opt_method, lam = lam)
 
+    P_init, E_init = theta0[-2], theta0[-1]
     if period_fit:
         # P와 E의 bound를 theta0
-        P_init, E_init = theta0[-2], theta0[-1]
         bounds_full[-2] = (max(P_init * 0.9, pmin), min(P_init * 1.1, pmax)) # P 범위
         bounds_full[-1] = (E_init - P_init, E_init + P_init)     # E 범위
+    else: 
+        bounds_full[-2] = (P_init, P_init)
+        bounds_full[-1] = (E_init, E_init)
 
-        # 2. Global minimization
-        res = minimize(chisq, theta0,
-                       args=(t, mag, emag, bmask, M_fit, n_dim, activated_bands),
-                       method='L-BFGS-B',
-                       bounds=bounds_full)
-
-        if res.success:
-            return res.x, res.fun #, M_fit, n_dim
-        else: flag = True
+    # 2. Global minimization
+    res = minimize(chisq, theta0,
+                    args=(t, mag, emag, bmask, M_fit, n_dim, activated_bands),
+                    method='L-BFGS-B',
+                    bounds=bounds_full)
+    if res.success:
+        return res.x, res.fun #, M_fit, n_dim
     else: flag = True
         
     if flag:
