@@ -136,6 +136,7 @@ def peak_to_peak_amplitude(A, Q, Nx=1001, M_fit=None): # M_fit
 
 # === chisq function - fitness evaluation ===
 def chisq_single(theta, t, mag, emag, M_fit, P0=False, include_amp=True, unpack=True): 
+    print(theta, include_amp, unpack)
     if unpack:
         # convert into [m0, amp, A, Q, P, E]
         m0, amp, A, Q, P, E = unpack_theta(theta, n_bands=1, M_fit=M_fit,
@@ -201,8 +202,10 @@ def LSQ_fit(P0, args, M_fit, activated_bands, opt_method = 'lsq',
                 # bounds_single: [m0, A1..AM, Q1..QM, E]
                 bounds_single = [(-np.inf, np.inf)] + [(Amin, Amax)] * M_fit + [(0, 2 * np.pi)] * M_fit + [(E0 - P0, E0 + P0)]
                 
+                print(theta_ft)
+                print(bounds_single)
                 res = minimize(chisq_single, theta_ft,
-                               args=(t_ft, mag_ft, emag_ft, M_fit, P0, False, False), 
+                               args=(t_ft, mag_ft, emag_ft, M_fit, P0, False, True), 
                                method='L-BFGS-B', bounds=bounds_single)
                 
                 if res.success:
