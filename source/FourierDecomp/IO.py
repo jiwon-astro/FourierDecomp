@@ -61,7 +61,7 @@ def get_data_config(mode: Optional[str] = None) -> DataConfig:
 # output header
 # ===================================================
 # --- dynamic header based on activated bands ---
-def _build_fd_header(mode = None):
+def build_fd_header(mode = None):
     """
     Build output header for Fourier decomposition using only activated bands.
     Output row format must match decomposition.fourier_decomp().

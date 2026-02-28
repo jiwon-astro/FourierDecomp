@@ -4,7 +4,7 @@ from tqdm.notebook import tqdm
 import csv
 
 from .params import period_fit
-from .IO import get_data_config, _build_fd_header
+from .IO import get_data_config, build_fd_header
 
 def _init_worker(ls_data, df_ident):
     """Runs once per worker process."""
@@ -23,7 +23,7 @@ def thread_run(fd_output, ids, period_fit = period_fit,
     if not fd_output.exists():
         with open(fd_output, 'w', newline='') as f:
             writer = csv.writer(f, delimiter=' ')
-            columns = _build_fd_header()
+            columns = build_fd_header()
             writer.writerow(columns)
 
     # pool
