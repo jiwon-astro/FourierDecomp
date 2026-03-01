@@ -62,7 +62,7 @@ def set_ylim(y,yerr,amp=1):
     return ymax+yscale, ymin-yscale
 
 # plot lig ht curve
-def plot_lc(sid, P0, mode='ogle', selected_filters = ['I'], phase_max = 2):
+def plot_lc(sid, P0, mode='ogle', selected_filters = ['I'], phase_max = 2, scale = 1.0):
     cfg = get_data_config(mode)
     filters = cfg.filters
     prefixs = cfg.prefixs
@@ -86,7 +86,7 @@ def plot_lc(sid, P0, mode='ogle', selected_filters = ['I'], phase_max = 2):
         ax[i].errorbar(ext_phase, ext_mag, yerr = ext_emag, ls='None', 
                        color=lc_colors[ib], marker=lc_markers[ib], lw = 1, zorder = 0)
 
-        y_lb, y_ub = set_ylim(mag_ft, emag_ft)
+        y_lb, y_ub = set_ylim(mag_ft, emag_ft, amp = scale)
 
         ax[i].text(0,y_lb-(y_lb-y_ub)*0.1,s=f'P={P0:.4f}days')
         ax[i].text(0.05, y_ub+(y_lb-y_ub)*0.2, s=f'{band} ({len(t_ft)} epochs)')
