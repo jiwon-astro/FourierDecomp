@@ -249,8 +249,8 @@ def fourier_decomp(sid, period_fit=False, use_optim=False, adaptive_lam=True,
     bic_1 = bic(chi2_opt_1, len(t), len(theta_opt_1))
     bic_2 = bic(chi2_opt_2, len(t),len(theta_opt_2))
 
-    _, fval_grid_1 = eval_on_grid(theta_opt_1, M_fit_1)
-    _, fval_grid_2 = eval_on_grid(theta_opt_2, M_fit_2)
+    _, fval_grid_1 = eval_on_grid(theta_opt_1, n_bands, M_fit_1)
+    _, fval_grid_2 = eval_on_grid(theta_opt_2, n_bands, M_fit_2)
     spike_1 = spike_penalty(fval_grid_1)
     spike_2 = spike_penalty(fval_grid_2)
     bic_1 += w_spike * spike_1
