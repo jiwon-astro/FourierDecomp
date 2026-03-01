@@ -113,9 +113,9 @@ def calculate_m0_amp(args, sigma = 3.0, maxiter = 5):
     return m0s, A0s, resmask 
 
 # === Main Function ===
-def fourier_decomp(sid, period_fit=False, use_optim=False, adaptive_lam=True,
-                   verbose=False, plot_LS=False, K=K, harmonics=harmonics, w_spike=w_spike,
-                   mode='ogle', init='lsq'):
+def fourier_decomp(sid, mode='ogle', init='lsq',
+                   period_fit=False, use_optim=False, adaptive_lam=True,
+                   verbose=False, plot_LS=False, K=K, harmonics=harmonics, w_spike=w_spike):
     # Load data
     if mode is None: mode = get_data_config().mode
     cfg = get_data_config(mode)

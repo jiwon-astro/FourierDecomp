@@ -18,16 +18,16 @@ def _init_worker(ls_data, df_ident, df_rrfit, templates):
 
 def _worker_call(args):
     """Picklable wrapper for imap."""
-    sid, period_fit, use_optim, adaptive_lam, mode, init, verbose = args
+    sid, mode, init, period_fit, use_optim, adaptive_lam, verbose = args
     from . import decomposition as decomp_mod
     try:
         row = decomp_mod.fourier_decomp(
             sid,
+            mode=mode,
+            init=init,
             period_fit=period_fit,
             use_optim=use_optim,
             adaptive_lam=adaptive_lam,
-            mode=mode,
-            init=init,
             verbose=verbose,
         )
         return (sid, row, None)
@@ -87,7 +87,7 @@ def mp_run(
         try:
             it = pool.imap_unordered(
                 _worker_call,
-                ((sid, period_fit, use_optim, adaptive_lam, mode, init, verbose) for sid in ids),
+                ((sid, mode, init, period_fit, use_optim, adaptive_lam, verbose) for sid in ids),
                 chunksize=chunksize,
             )
 
@@ -151,8 +151,8 @@ def thread_run(fd_output, ids, period_fit = period_fit,
         # asychronous processing
         for sid in ids:
             pool.apply_async(decomp_mod.fourier_decomp, 
-                             args =(sid, period_fit,use_optim, adaptive_lam,
-                                    mode, init, False),
+                             args =(sid, mode, init, period_fit, 
+                                    use_optim, adaptive_lam, False),
                             callback = callback)
         pool.close()
         pool.join() # close / return pool to os
