@@ -70,6 +70,7 @@ def calculate_m0_amp(args, sigma = 3.0, maxiter = 5):
     t, mag, emag, bmask = args
     n_bands = len(bmask)
     m0s = np.zeros(n_bands); A0s = np.zeros(n_bands)
+    resmasks = []
     for i, m in enumerate(bmask):
         mag_ft, emag_ft = mag[m], emag[m]
         w_ft = 1/np.maximum(emag_ft, ERR_FLOOR)**2
@@ -84,7 +85,8 @@ def calculate_m0_amp(args, sigma = 3.0, maxiter = 5):
             if n_curr<n_prev: n_prev = n_curr
             else: break
         m0s[i] = m0_ft; A0s[i] = Amp_ft
-    return m0s, A0s
+        resmasks.append(resmask)
+    return m0s, A0s, resmask
 
 # === Main Function ===
 def fourier_decomp(sid, period_fit=False, use_optim=False, verbose=False, plot_LS=False,
@@ -108,7 +110,7 @@ def fourier_decomp(sid, period_fit=False, use_optim=False, verbose=False, plot_L
     bmask = [(bands == band) for band in filters]
     args = (t, mag, emag, bmask)
 
-    m0_data, A0_data = calculate_m0_amp(args) # mean / peak-to-peak amplitude
+    m0_data, A0_data, resmasks = calculate_m0_amp(args) # mean / peak-to-peak amplitude
     # ======================================
     # 1) initial period
     # =====================================
