@@ -60,7 +60,7 @@ def mp_run(
     if not fd_output.exists():
         with open(fd_output, "w", newline="") as f:
             writer = csv.writer(f, delimiter=" ")
-            writer.writerow(build_fd_header())
+            writer.writerow(build_fd_header(mode))
 
     # 2) choose mp context
     # fork가 불가능한 환경이면 spawn로 자동 fallback
