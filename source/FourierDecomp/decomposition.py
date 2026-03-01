@@ -7,7 +7,7 @@ from astropy.stats import sigma_clip
 
 from gatspy import periodic # multiband lomb-scargle
 
-from .params import M_MAX, M_MIN, THRESHOLD, Amin, Amax, pmin, pmax, n0, K, harmonics, snr, opt_method, lam
+from .params import M_MAX, M_MIN, THRESHOLD, Amin, Amax, pmin, pmax, n0, K, harmonics, snr, opt_method, lam, ERR_FLOOR
 from .LC import phase_gap_exceeds
 from .IO import epoch_arrays, get_data_config 
 from .LSQ import F, LSQ_fit, chisq, chisq_single, unpack_theta
@@ -72,7 +72,7 @@ def calculate_m0_amp(args, sigma = 3.0, maxiter = 5):
     m0s = np.zeros(n_bands); A0s = np.zeros(n_bands)
     for i, m in enumerate(bmask):
         mag_ft, emag_ft = mag[m], emag[m]
-        w_ft = 1/emag_ft**2
+        w_ft = 1/np.maximum(emag_ft, ERR_FLOOR)**2
         n_prev = len(mag_ft)
         m0_ft = np.average(mag_ft, weights = w_ft)
         for _ in range(maxiter):
@@ -108,7 +108,7 @@ def fourier_decomp(sid, period_fit=False, use_optim=False, verbose=False, plot_L
     bmask = [(bands == band) for band in filters]
     args = (t, mag, emag, bmask)
 
-    m0s, A0s = calculate_m0_amp(args) # mean / peak-to-peak amplitude
+    m0_data, A0_data = calculate_m0_amp(args) # mean / peak-to-peak amplitude
     # ======================================
     # 1) initial period
     # =====================================
@@ -132,7 +132,7 @@ def fourier_decomp(sid, period_fit=False, use_optim=False, verbose=False, plot_L
         A_tmp[:mlen] = A_RRFIT[:mlen]
         Q_tmp[:mlen] = Q_RRFIT[:mlen]
 
-        #theta0_rrfit = np.array([*m0s, *A0s, *A_tmp, *Q_tmp, P0, E0], dtype=float)
+        #theta0_rrfit = np.array([*m0_data, *A0_data, *A_tmp, *Q_tmp, P0, E0], dtype=float)
         
         P0s = np.array([P0])
         Zs = np.array([np.nan])
@@ -255,16 +255,17 @@ def fourier_decomp(sid, period_fit=False, use_optim=False, verbose=False, plot_L
         t_ft, mag_ft, emag_ft = t[mask], mag[mask], emag[mask]
         N[i] = len(t_ft)
         
-        w_ft = 1 / emag_ft**2
+        w_ft = 1 / np.maximum(emag_ft, ERR_FLOOR)**2
         # photometric error (w/o genuine pulsation)
-        sig[i] = np.sqrt(np.average(mag_ft-m0s[ib], weights=w_ft))
+        dm_ft = mag_ft-m0_data[ib]
+        sig[i] = np.sqrt(np.average(dm_ft**2, weights=w_ft))
     
         theta_ft = [m0[i], amp[i], A_fit, Q_fit, P, E] 
         fval = F(theta_ft, t_ft, M_fit_final)
 
         # residual 
         resid_ft = mag_ft - fval
-        rms[i] = np.sqrt(np.average(resid_ft, weights=w_ft))
+        rms[i] = np.sqrt(np.average(resid_ft**2, weights=w_ft))
 
         # parameter boundary excession check
         if (amp[i] > Amax) or (amp[i] < Amin): flag = 1
