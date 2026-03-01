@@ -23,18 +23,17 @@ def bic(reduced_chi2, N, k):
 
 def eval_on_grid(theta, n_bands, M_fit, n_grid = 100, unpack=True):
     phi_grid = np.arange(0, 1, 1/n_grid)
-    if unpack:
-        theta_rev = unpack_theta(theta, n_bands, M_fit=M_fit, include_amp=True)
-    else: theta_rev = theta.copy()
-    theta_rev[-2] = 1.0  # unit period
-    theta_rev[-1] = (theta[-1]/theta[-2])%1  # phase_offset
+    _, amp, A, Q, P, E = unpack_theta(theta, n_bands, M_fit=M_fit, include_amp=True)
+    theta_rev = np.array([0, amp[0], A, Q, 1., (E/P)%1]) # unit period + phase offset, enough to use single band
     fval  = F(theta_rev, phi_grid, M_fit)
     return phi_grid, fval
 
-def spike_penalty(fval):
+def spike_penalty(fval, ratio = 0.05):
     # model value at uniform grid
     d2 = np.diff(fval, n=2)
-    return np.percentile(np.abs(d2), 95)
+    pk_max = np.max(np.abs(d2)) # spike
+    pk_tot = np.sum(np.abs(d2)) # total variance
+    return pk_max + ratio * pk_tot
 
 def adjust_lambda(lam0, gmax, M_fit, N, lam_min = 1e-5, lam_max = 1e-1):
     # Heuristic function to adjust regularization weight
