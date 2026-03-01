@@ -10,7 +10,7 @@ from gatspy import periodic # multiband lomb-scargle
 from .params import M_MAX, M_MIN, THRESHOLD, Amin, Amax, pmin, pmax, n0, K, harmonics, snr, opt_method, lam
 from .LC import phase_gap_exceeds
 from .IO import epoch_arrays, get_data_config 
-from .LSQ import LSQ_fit, chisq, chisq_single, unpack_theta
+from .LSQ import F, LSQ_fit, chisq, chisq_single, unpack_theta
 from .period_finder import robust_period_search
 
 import warnings
