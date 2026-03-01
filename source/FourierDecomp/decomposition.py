@@ -7,8 +7,8 @@ from astropy.stats import sigma_clip
 
 from gatspy import periodic # multiband lomb-scargle
 
-from .params import M_MAX, M_MIN, THRESHOLD, Amin, Amax, pmin, pmax, n0, K, harmonics, snr, opt_method, lam, ERR_FLOOR
-from .LC import phase_gap_exceeds
+from .params import M_MAX, M_MIN, Amin, Amax, pmin, pmax, n0, K, harmonics, snr, opt_method, lam0, lam_min, lam_max, THRESHOLD, ERR_FLOOR
+from .LC import phase_gap_score
 from .IO import epoch_arrays, get_data_config 
 from .LSQ import F, LSQ_fit, chisq, chisq_single, unpack_theta
 from .period_finder import robust_period_search
@@ -21,8 +21,13 @@ def bic(reduced_chi2, N, k):
     chi2 = reduced_chi2 * dof
     return chi2 + k * np.log(max(N, 1))
 
-def _fit_wrapper(P0, args, M_fit, bounds_full, activated_bands, phase_flag, 
-                 period_fit = False, use_optim=False):
+def adjust_lambda(lam0, gmax, M_fit, N, lam_min = 1e-5, lam_max = 1e-1):
+    # Heuristic function to adjust regularization weight
+    lam = lam0 * (max(gmax, 0.05) / 0.15)**2 * (M_fit / 6.0)**2 * (30/max(N, 10))
+    return float(np.clip(lam, lam_min, lam_max))   
+
+def _fit_wrapper(P0, args, M_fit, bounds_full, activated_bands, phase_gaps, 
+                period_fit=False, use_optim=False, adaptive_lam=True):
     """
     Auxilary function to minimize objective function for given (P, M_fit)
     """
@@ -31,6 +36,10 @@ def _fit_wrapper(P0, args, M_fit, bounds_full, activated_bands, phase_flag,
     n_dim = 2 * n_bands + 2 * M_fit + 2 # n_dim 
     
     # initial parameter
+    phase_flag = (phase_gaps > THRESHOLD)
+    lam = lam0
+    if adaptive_lam:
+        lam = adjust_lambda(lam0, phase_gaps[0], M_fit, np.sum(bmask[0]), lam_min=lam_min, lam_max=lam_max) # set first band as pivotal band
     theta0 = LSQ_fit(P0, args, M_fit, activated_bands, phase_flag=phase_flag, 
                         opt_method = opt_method, lam = lam)
 
@@ -86,11 +95,12 @@ def calculate_m0_amp(args, sigma = 3.0, maxiter = 5):
             else: break
         m0s[i] = m0_ft; A0s[i] = Amp_ft
         resmasks.append(resmask)
-    return m0s, A0s, resmask
+    return m0s, A0s, resmask 
 
 # === Main Function ===
-def fourier_decomp(sid, period_fit=False, use_optim=False, verbose=False, plot_LS=False,
-                  K=K, harmonics=harmonics, mode='ogle', init='lsq'):
+def fourier_decomp(sid, period_fit=False, use_optim=False, adaptive_lam=True,
+                   verbose=False, plot_LS=False, K=K, harmonics=harmonics, 
+                   mode='ogle', init='lsq'):
     # Load data
     if mode is None: mode = get_data_config().mode
     cfg = get_data_config(mode)
@@ -110,7 +120,7 @@ def fourier_decomp(sid, period_fit=False, use_optim=False, verbose=False, plot_L
     bmask = [(bands == band) for band in filters]
     args = (t, mag, emag, bmask)
 
-    m0_data, A0_data, resmasks = calculate_m0_amp(args) # mean / peak-to-peak amplitude
+    m0_data, _, _ = calculate_m0_amp(args) # mean / peak-to-peak amplitude
     # ======================================
     # 1) initial period
     # =====================================
@@ -162,14 +172,14 @@ def fourier_decomp(sid, period_fit=False, use_optim=False, verbose=False, plot_L
     for Pi, Zi in zip(P0s, Zs):
         #if Zi<0.2*Zmax: continue # non significant component
         # phase filling check
-        phase_flag_i = np.array([phase_gap_exceeds(t[mask], Pi, M_fit=M_MAX) for mask in bmask])
+        phase_gaps_i = np.array([phase_gap_score(t[mask], Pi, M_fit=M_MAX) for mask in bmask]) # maximum gap in phase domain
         
         """
         theta_init = None
         if init == 'rrfit': theta_init = theta0_rrfit
         """
-        theta_1_tmp, chi2_1_tmp = _fit_wrapper(Pi, args, M_fit_1, bounds_1, activated_bands,
-                                               phase_flag = phase_flag_i, period_fit=period_fit, use_optim=use_optim)
+        theta_1_tmp, chi2_1_tmp = _fit_wrapper(Pi, args, M_fit_1, bounds_1, activated_bands, phase_gaps = phase_gaps_i, 
+                                               period_fit=period_fit, use_optim=use_optim, adaptive_lam=adaptive_lam)
                                                #theta0=theta_init)
         if verbose:
             print(f"{Pi:.4f} days / chi2 = {chi2_1_tmp:.4f}")
@@ -212,8 +222,8 @@ def fourier_decomp(sid, period_fit=False, use_optim=False, verbose=False, plot_L
 
     # slicing 
     bounds_2 = _build_bounds(n_bands, M_fit_2)
-    theta_opt_2, chi2_opt_2 = _fit_wrapper(P0, args, M_fit_2, bounds_2, activated_bands,
-                                           phase_flag = phase_flag, period_fit= period_fit, use_optim=use_optim)
+    theta_opt_2, chi2_opt_2 = _fit_wrapper(P0, args, M_fit_2, bounds_2, activated_bands, phase_gaps = phase_gaps_i, 
+                                           period_fit= period_fit, use_optim=use_optim, adaptive_lam=adaptive_lam)
                                            #theta0=(theta0_rrfit if init=='rrfit' else None))
 
     # 2nd fitting is better than 1st fitting

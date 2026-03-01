@@ -21,7 +21,7 @@ DATA_CONFIGS = {
 
 # --- fourier series ---
 M_MIN = 3   # minimum Fourier series order
-M_MAX = 15  # Max fourier order
+M_MAX = 10  # Max fourier order
 ERR_FLOOR = 0.01
 
 # --- adaptive fitting ---
@@ -33,7 +33,9 @@ pmin, pmax = 0.2, 300 # [days]
 delta_P_tol = 0.0001 # [days] 
 
 opt_method = 'lasso'
-lam = 1e-2 # regularization coeff
+lam0 = 1e-2 # regularization coeff
+lam_min = 1e-4
+lam_max = 5e-2
 
 n0 = 2 # oversampling
 harmonics = 1 # maximum order of harmonics [P0, P0/n, n*P0]

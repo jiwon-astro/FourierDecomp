@@ -6,12 +6,15 @@ from .IO import phot_names, epoch_arrays, get_data_config
 def compute_phase(t, P):
     return (t / P) % 1.0
 
-def phase_gap_exceeds(t, P, threshold=0.05, M_fit=M_MAX): 
+def phase_gap_score(t, P, M_fit=M_MAX): 
     if len(t) < (M_fit + 2): return True # M_fit 사용
     phi = compute_phase(t, P)
     phi_sorted = np.sort(phi)
     gaps = np.diff(np.r_[phi_sorted, phi_sorted[0] + 1.0])
-    return gaps.max() > threshold
+    gmax = gaps.max()
+    # g90  = np.percentile(gaps, 90)
+    return gmax
+    #return gaps.max() > threshold
 
 # Expand phased light curve (arbitary phase range)
 def expand_light_curve(t, flux, flux_err,  period, phase_range = (0,1)):
