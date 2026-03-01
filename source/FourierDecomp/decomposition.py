@@ -135,7 +135,10 @@ def fourier_decomp(sid, period_fit=False, use_optim=False, adaptive_lam=True,
     bmask = [(bands == band) for band in filters]
     args = (t, mag, emag, bmask)
 
-    m0_data, _, _ = calculate_m0_amp(args) # mean / peak-to-peak amplitude
+    m0_data, amp_data, _ = calculate_m0_amp(args) # mean / peak-to-peak amplitude
+    if verbose:
+        print(f'mean mags = {m0_data}')
+        print(f'amplitude = {amp_data}')
     # ======================================
     # 1) initial period
     # =====================================
