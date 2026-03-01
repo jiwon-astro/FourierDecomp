@@ -21,9 +21,11 @@ def bic(reduced_chi2, N, k):
     chi2 = reduced_chi2 * dof
     return chi2 + k * np.log(max(N, 1))
 
-def eval_on_grid(theta, M_fit, n_grid = 100):
+def eval_on_grid(theta, n_bands, M_fit, n_grid = 100, unpack=True):
     phi_grid = np.arange(0, 1, 1/n_grid)
-    theta_rev = theta.copy()
+    if unpack:
+        theta_rev = unpack_theta(theta, n_bands, M_fit=M_fit, include_amp=True)
+    else: theta_rev = theta.copy()
     theta_rev[-2] = 1.0  # unit period
     theta_rev[-1] = (theta[-1]/theta[-2])%1  # phase_offset
     fval  = F(theta_rev, phi_grid, M_fit)
