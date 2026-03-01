@@ -108,6 +108,7 @@ def fourier_decomp(sid, period_fit=False, use_optim=False, verbose=False, plot_L
     bmask = [(bands == band) for band in filters]
     args = (t, mag, emag, bmask)
 
+    m0s, A0s = calculate_m0_amp(args) # mean / peak-to-peak amplitude
     # ======================================
     # 1) initial period
     # =====================================
@@ -124,7 +125,6 @@ def fourier_decomp(sid, period_fit=False, use_optim=False, verbose=False, plot_L
         T_idx = int(fit_row['T'])
         tmpl = templates[f'T{T_idx}']
 
-        m0s, A0s = calculate_m0_amp(args)
         A_tmp = np.zeros(M_MAX); Q_tmp = np.zeros(M_MAX)
         A_RRFIT = np.array(tmpl.A, dtype=float)
         Q_RRFIT = np.array(tmpl.Q, dtype=float)
@@ -255,10 +255,16 @@ def fourier_decomp(sid, period_fit=False, use_optim=False, verbose=False, plot_L
         t_ft, mag_ft, emag_ft = t[mask], mag[mask], emag[mask]
         N[i] = len(t_ft)
         
-        sig[i] = np.sqrt(np.average(mag_ft, weights=1 / emag_ft**2))
+        w_ft = 1 / emag_ft**2
+        # photometric error (w/o genuine pulsation)
+        sig[i] = np.sqrt(np.average(mag_ft-m0s[ib], weights=w_ft))
     
         theta_ft = [m0[i], amp[i], A_fit, Q_fit, P, E] 
-        rms[i] = np.sqrt(chisq_single(theta_ft, t_ft, mag_ft, emag_ft, M_fit_final, unpack=False) / N[i])
+        fval = F(theta_ft, t_ft, M_fit_final)
+
+        # residual 
+        resid_ft = mag_ft - fval
+        rms[i] = np.sqrt(np.average(resid_ft, weights=w_ft))
 
         # parameter boundary excession check
         if (amp[i] > Amax) or (amp[i] < Amin): flag = 1

@@ -173,8 +173,8 @@ def LSQ_fit(P0, args, M_fit, activated_bands, opt_method = 'lsq',
     t, mag, emag, bmask = args
     m0 = np.zeros(n_bands)
     amp0 = np.zeros(n_bands)
-    A_accum = np.zeros(M_fit) # M_fit
-    Q_accum = np.zeros(M_fit) # M_fit
+    alpha_accum = np.zeros(M_fit) # M_fit, AcosQ
+    beta_accum = np.zeros(M_fit) # M_fit,  AsinQ
     count = np.zeros(M_fit)   # M_fit
     E0 = None
     eps = 1e-6
@@ -223,15 +223,19 @@ def LSQ_fit(P0, args, M_fit, activated_bands, opt_method = 'lsq',
         amp0[i] = scale
         
         if (not phase_flag[ib]) or (phase_flag[ib] and res_success):
-            A_accum += A_ft / scale
-            Q_accum += Q_ft
+            A_norm = A_ft/scale
+            alpha_accum += A_norm * np.cos(Q_ft)
+            beta_accum  += A_norm * np.sin(Q_ft)
             count += 1
 
     valid = count > 0
-    A0 = np.zeros_like(A_accum)
-    Q0 = np.zeros_like(Q_accum)
-    A0[valid] = A_accum[valid] / count[valid]
-    Q0[valid] = Q_accum[valid] / count[valid]
+    alpha0 = np.zeros_like(A_accum)
+    beta0 = np.zeros_like(Q_accum)
+    alpha0[valid] = alpha_accum[valid] / count[valid]
+    beta0[valid]  = beta_accum[valid] / count[valid]
+
+    A0 = np.hypot(alpha0, beta0) # (alpha^2 + beta^2)^1/2
+    Q0 = (np.arctan2(beta0, alpha0) % (2*np.pi)) # sin, cos
 
     theta0 = np.hstack([m0, amp0, A0, Q0, P0, E0])
     return theta0
