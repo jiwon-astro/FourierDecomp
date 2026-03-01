@@ -7,7 +7,7 @@ from astropy.stats import sigma_clip
 
 from gatspy import periodic # multiband lomb-scargle
 
-from .params import M_MAX, M_MIN, Amin, Amax, pmin, pmax, n0, K, harmonics, snr, opt_method, lam0, lam_min, lam_max, THRESHOLD, ERR_FLOOR
+from .params import M_MAX, M_MIN, Amin, Amax, pmin, pmax, n0, K, harmonics, snr, opt_method, lam0, lam_min, lam_max, w_spike, THRESHOLD, ERR_FLOOR
 from .LC import phase_gap_score
 from .IO import epoch_arrays, get_data_config 
 from .LSQ import F, LSQ_fit, chisq, chisq_single, unpack_theta
@@ -21,9 +21,22 @@ def bic(reduced_chi2, N, k):
     chi2 = reduced_chi2 * dof
     return chi2 + k * np.log(max(N, 1))
 
+def eval_on_grid(theta, M_fit, n_grid = 100):
+    phi_grid = np.arange(0, 1, 1/n_grid)
+    theta_rev = theta.copy()
+    theta_rev[-2] = 1.0  # unit period
+    theta_rev[-1] = (theta[-1]/theta[-2])%1  # phase_offset
+    fval  = F(theta_rev, phi_grid, M_fit)
+    return phi_grid, fval
+
+def spike_penalty(fval):
+    # model value at uniform grid
+    d2 = np.diff(fval, n=2)
+    return np.percentile(np.abs(d2), 95)
+
 def adjust_lambda(lam0, gmax, M_fit, N, lam_min = 1e-5, lam_max = 1e-1):
     # Heuristic function to adjust regularization weight
-    lam = lam0 * (max(gmax, 0.05) / 0.15)**2 * (M_fit / 6.0)**2 * (30/max(N, 10))
+    lam = lam0 * (max(gmax, 0.05) / 0.12)**3 * (M_fit / 5.0)**2 * (30/max(N, 10))
     return float(np.clip(lam, lam_min, lam_max))   
 
 def _fit_wrapper(P0, args, M_fit, bounds_full, activated_bands, phase_gaps, 
@@ -100,7 +113,7 @@ def calculate_m0_amp(args, sigma = 3.0, maxiter = 5):
 
 # === Main Function ===
 def fourier_decomp(sid, period_fit=False, use_optim=False, adaptive_lam=True,
-                   verbose=False, plot_LS=False, K=K, harmonics=harmonics, 
+                   verbose=False, plot_LS=False, K=K, harmonics=harmonics, w_spike=w_spike,
                    mode='ogle', init='lsq'):
     # Load data
     if mode is None: mode = get_data_config().mode
@@ -233,6 +246,14 @@ def fourier_decomp(sid, period_fit=False, use_optim=False, adaptive_lam=True,
     
     bic_1 = bic(chi2_opt_1, len(t), len(theta_opt_1))
     bic_2 = bic(chi2_opt_2, len(t),len(theta_opt_2))
+
+    _, fval_grid_1 = eval_on_grid(theta_opt_1, M_fit_1)
+    _, fval_grid_2 = eval_on_grid(theta_opt_2, M_fit_2)
+    spike_1 = spike_penalty(fval_grid_1)
+    spike_2 = spike_penalty(fval_grid_2)
+    bic_1 += w_spike * spike_1
+    bic_2 += w_spike * spike_2
+
     if np.isfinite(chi2_opt_2) and bic_2 <= bic_1:
         theta_opt_final = theta_opt_2
         chi2_opt_final = chi2_opt_2

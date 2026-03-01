@@ -37,6 +37,8 @@ lam0 = 1e-2 # regularization coeff
 lam_min = 1e-4
 lam_max = 5e-2
 
+w_spike = 50.0 # spike penalty weight
+
 n0 = 2 # oversampling
 harmonics = 1 # maximum order of harmonics [P0, P0/n, n*P0]
 K = 5 # peak search for aliasing cleaning
