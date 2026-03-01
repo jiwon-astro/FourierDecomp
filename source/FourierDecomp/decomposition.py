@@ -21,7 +21,7 @@ def bic(reduced_chi2, N, k):
     chi2 = reduced_chi2 * dof
     return chi2 + k * np.log(max(N, 1))
 
-def eval_on_grid(theta, n_bands, M_fit, n_grid = 100, unpack=True):
+def eval_on_grid(theta, n_bands, M_fit, n_grid = 200, unpack=True):
     phi_grid = np.arange(0, 1, 1/n_grid)
     _, amp, A, Q, P, E = unpack_theta(theta, n_bands, M_fit=M_fit, include_amp=True)
     theta_rev = np.array([0, amp[0], A, Q, 1., (E/P)%1]) # unit period + phase offset, enough to use single band
@@ -50,7 +50,7 @@ def _fit_wrapper(P0, args, M_fit, bounds_full, activated_bands, phase_gaps,
     n_dim = 2 * n_bands + 2 * M_fit + 2 # n_dim 
     
     # initial parameter
-    phase_flag = (phase_gaps > THRESHOLD)
+    phase_flag = (phase_gaps > 0.05)
     lam = lam0
     if adaptive_lam:
         lam = adjust_lambda(lam0, phase_gaps[0], M_fit, np.sum(bmask[0]), lam_min=lam_min, lam_max=lam_max) # set first band as pivotal band
