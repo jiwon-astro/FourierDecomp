@@ -44,5 +44,6 @@ snr = 5 # relative peak strength for aliased frequency detection
 
 period_fit = False
 use_optim = True
+adaptive_lam = True
 
 init = 'rrfit' # lsq or rrfit

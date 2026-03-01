@@ -27,7 +27,7 @@ def adjust_lambda(lam0, gmax, M_fit, N, lam_min = 1e-5, lam_max = 1e-1):
     return float(np.clip(lam, lam_min, lam_max))   
 
 def _fit_wrapper(P0, args, M_fit, bounds_full, activated_bands, phase_gaps, 
-                period_fit=False, use_optim=False, adaptive_lam=True):
+                period_fit=False, use_optim=False, adaptive_lam=True, verbose=False):
     """
     Auxilary function to minimize objective function for given (P, M_fit)
     """
@@ -40,6 +40,7 @@ def _fit_wrapper(P0, args, M_fit, bounds_full, activated_bands, phase_gaps,
     lam = lam0
     if adaptive_lam:
         lam = adjust_lambda(lam0, phase_gaps[0], M_fit, np.sum(bmask[0]), lam_min=lam_min, lam_max=lam_max) # set first band as pivotal band
+        if verbose: print(f'phase_gap_max = {phase_gaps} / N_ft = {np.sum(bmask, axis = 1)} / lam = {lam:.2e}')
     theta0 = LSQ_fit(P0, args, M_fit, activated_bands, phase_flag=phase_flag, 
                         opt_method = opt_method, lam = lam)
 
@@ -179,7 +180,7 @@ def fourier_decomp(sid, period_fit=False, use_optim=False, adaptive_lam=True,
         if init == 'rrfit': theta_init = theta0_rrfit
         """
         theta_1_tmp, chi2_1_tmp = _fit_wrapper(Pi, args, M_fit_1, bounds_1, activated_bands, phase_gaps = phase_gaps_i, 
-                                               period_fit=period_fit, use_optim=use_optim, adaptive_lam=adaptive_lam)
+                                               period_fit=period_fit, use_optim=use_optim, adaptive_lam=adaptive_lam, verbose=verbose)
                                                #theta0=theta_init)
         if verbose:
             print(f"{Pi:.4f} days / chi2 = {chi2_1_tmp:.4f}")
@@ -189,7 +190,7 @@ def fourier_decomp(sid, period_fit=False, use_optim=False, adaptive_lam=True,
             theta_opt_1 = theta_1_tmp
             chi2_opt_1 = chi2_1_tmp
             P0 = Pi; Zmax = Zi 
-            phase_flag = phase_flag_i
+            phase_gaps = phase_gaps_i
             
     if not np.isfinite(chi2_opt_1):
         print(f'ID = {sid} / M_MAX fit failed.')
@@ -222,8 +223,8 @@ def fourier_decomp(sid, period_fit=False, use_optim=False, adaptive_lam=True,
 
     # slicing 
     bounds_2 = _build_bounds(n_bands, M_fit_2)
-    theta_opt_2, chi2_opt_2 = _fit_wrapper(P0, args, M_fit_2, bounds_2, activated_bands, phase_gaps = phase_gaps_i, 
-                                           period_fit= period_fit, use_optim=use_optim, adaptive_lam=adaptive_lam)
+    theta_opt_2, chi2_opt_2 = _fit_wrapper(P0, args, M_fit_2, bounds_2, activated_bands, phase_gaps = phase_gaps, 
+                                           period_fit= period_fit, use_optim=use_optim, adaptive_lam=adaptive_lam, verbose=verbose)
                                            #theta0=(theta0_rrfit if init=='rrfit' else None))
 
     # 2nd fitting is better than 1st fitting
