@@ -191,6 +191,9 @@ def fourier_decomp(sid, period_fit=False, use_optim=False, verbose=False, plot_L
     _, _, A_vec_1, _, _, _ = unpack_theta(theta_opt_1, n_bands, M_fit=M_fit_1, include_amp=True)
 
     M_trunc = M_MAX
+    # To Do: Dealing the M_MIN?
+    # currently, M_MIN = 3  (fixed)
+    # for 1O/2O? - better to use M_MIN<3?
     if A_vec_1[0] > 1e-5: # not close to 0
         dA = np.diff(A_vec_1)
         significant = np.where(dA/A_vec_1[:-1]>THRESHOLD)[0]

@@ -229,8 +229,8 @@ def LSQ_fit(P0, args, M_fit, activated_bands, opt_method = 'lsq',
             count += 1
 
     valid = count > 0
-    alpha0 = np.zeros_like(A_accum)
-    beta0 = np.zeros_like(Q_accum)
+    alpha0 = np.zeros(M_fit)
+    beta0 = np.zeros(M_fit)
     alpha0[valid] = alpha_accum[valid] / count[valid]
     beta0[valid]  = beta_accum[valid] / count[valid]
 
