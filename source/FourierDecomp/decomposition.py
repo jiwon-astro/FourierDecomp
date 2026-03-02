@@ -97,20 +97,24 @@ def calculate_m0_amp(args, sigma = 3.0, maxiter = 5):
     resmasks = []
     for i, m in enumerate(bmask):
         mag_ft, emag_ft = mag[m], emag[m]
-        w_ft = 1/np.maximum(emag_ft, ERR_FLOOR)**2
-        n_prev = len(mag_ft)
-        m0_ft = np.average(mag_ft, weights = w_ft)
-        for _ in range(maxiter):
-            resmask = sigma_clip(mag_ft - m0_ft, sigma=sigma, masked=True).mask
-            m0_ft = np.average(mag_ft[~resmask], weights = w_ft[~resmask])
-            Amp_ft = np.diff(np.percentile(mag_ft[~resmask], [5, 95])) 
-            #Amp_ft = max(mag_ft[~resmask]) - min(mag_ft[~resmask])
-            n_curr = (~resmask).sum()
-            if n_curr<n_prev: n_prev = n_curr
-            else: break
+        if len(mag_ft)==0: 
+            m0_ft = np.nan; amp_ft = np.nan
+            resmask = np.zeros_like(m, dtype=bool)
+        else:
+            w_ft = 1/np.maximum(emag_ft, ERR_FLOOR)**2
+            n_prev = len(mag_ft)
+            m0_ft = np.average(mag_ft, weights = w_ft)
+            for _ in range(maxiter):
+                resmask = sigma_clip(mag_ft - m0_ft, sigma=sigma, masked=True).mask
+                m0_ft = np.average(mag_ft[~resmask], weights = w_ft[~resmask])
+                Amp_ft = np.diff(np.percentile(mag_ft[~resmask], [5, 95])) 
+                #Amp_ft = max(mag_ft[~resmask]) - min(mag_ft[~resmask])
+                n_curr = (~resmask).sum()
+                if n_curr<n_prev: n_prev = n_curr
+                else: break
         m0s[i] = m0_ft; A0s[i] = Amp_ft
         resmasks.append(resmask)
-    return m0s, A0s, resmask 
+    return m0s, A0s, resmasks
 
 # === Main Function ===
 def fourier_decomp(sid, mode='ogle', init='lsq',
