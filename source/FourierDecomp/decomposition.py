@@ -53,8 +53,10 @@ def _fit_wrapper(P0, args, M_fit, bounds_full, activated_bands, phase_gaps,
     phase_flag = (phase_gaps > 0.05)
     lam = lam0
     if adaptive_lam:
-        lam = adjust_lambda(lam0, phase_gaps[0], M_fit, np.sum(bmask[0]), lam_min=lam_min, lam_max=lam_max) # set first band as pivotal band
-        if verbose: print(f'phase_gap_max = {phase_gaps} / N_ft = {np.sum(bmask, axis = 1)} / lam = {lam:.2e}')
+        gmax = phase_gaps[activated_bands].max()
+        N_fts = np.sum(bmask, axis = 1); N_ft_max = N_fts.max()
+        lam = adjust_lambda(lam0, gmax, M_fit, N_ft_max, lam_min=lam_min, lam_max=lam_max) # set first band as pivotal band
+        if verbose: print(f'phase_gap_max = {phase_gaps} / N_ft = {N_fts} / lam = {lam:.2e}')
     theta0 = LSQ_fit(P0, args, M_fit, activated_bands, phase_flag=phase_flag, 
                         opt_method = opt_method, lam = lam)
 
@@ -98,7 +100,7 @@ def calculate_m0_amp(args, sigma = 3.0, maxiter = 5):
     for i, m in enumerate(bmask):
         mag_ft, emag_ft = mag[m], emag[m]
         if len(mag_ft)==0: 
-            m0_ft = np.nan; amp_ft = np.nan
+            m0_ft = np.nan; Amp_ft = np.nan
             resmask = np.zeros_like(m, dtype=bool)
         else:
             w_ft = 1/np.maximum(emag_ft, ERR_FLOOR)**2
