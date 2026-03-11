@@ -19,6 +19,7 @@ def generate_synthetic_lc(args, m0_data, amp_data, P_true, E_true, A_tmpl, Q_tmp
                           amp_rescale=False, sig_amp = 0.1, rng = None):
     if rng is None: rng = np.random.default_rng()
     t, mag, emag, bmask = args
+    M_tmpl = len(A_tmpl) # template dimension
     
     # amplitude
     amp_syn = amp_data.copy()
@@ -40,7 +41,7 @@ def generate_synthetic_lc(args, m0_data, amp_data, P_true, E_true, A_tmpl, Q_tmp
         m0_ft, amp_ft = m0_data[i], amp_syn[i]
         # evaluate template at observed epoch
         theta_b = np.array([m0_ft, amp_ft, A_tmpl, Q_tmpl, P_true, E_true])
-        mag_syn_ft = F(theta_b, t_ft, M_fit=M_MAX)
+        mag_syn_ft = F(theta_b, t_ft, M_fit=M_tmpl)
         noise_ft = rng.normal(0.0, np.maximum(emag_ft, ERR_FLOOR))
         mag_syn[m] = mag_syn_ft + noise_ft
 
@@ -103,12 +104,19 @@ def monte_carlo_aliasing_analysis(sid, templates, mode=None,
                 tasks.append((tmpl_name, tmpl, seeds[k].generate_state(1)[0]))
                 k+=1
     
-    parallel = Parallel(n_jobs=n_jobs, return_as="generator", verbose=0)
-    gen = parallel(delayed(synthetic_curve_analysis)(
-            args_full, m0_data, amp_data, tmpl_name, tmpl,
-            rng_seed=seed, sig_amp=sig_amp, n0=n0
-        ) for tmpl_name, tmpl, seed in tasks
-    )
-    results = [res for res in tqdm(gen, total=len(tasks), 
-                                   disable=not verbose, desc="alias MC")]
+    with Parallel(n_jobs=n_jobs, return_as="generator", 
+                  backend="multiprocessing", verbose=0) as parallel:
+        gen = parallel(delayed(synthetic_curve_analysis)(
+                args_full, m0_data, amp_data, tmpl_name, tmpl,
+                rng_seed=seed, sig_amp=sig_amp, n0=n0
+            ) for tmpl_name, tmpl, seed in tasks
+        )
+        results = [res for res in tqdm(gen, total=len(tasks), 
+                                    disable=not verbose, desc="alias MC")]
+        try:
+            parallel._backend.terminate()
+            print("processes are terminated")
+        except Exception: 
+            pass
+
     return pd.DataFrame(results)
