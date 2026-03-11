@@ -17,6 +17,14 @@ from FourierDecomp.LSQ import F
 from FourierDecomp.IO import epoch_arrays, get_data_config
 from FourierDecomp.params import pmin, pmax, n0, ERR_FLOOR
 
+def P_alias(P, alias_freqs, n=1, m=1):
+    alias_freqs = np.asarray(alias_freqs).reshape(-1,1)
+    P2s = []
+    for sign in [-1, 1]:
+        Ps = np.vstack([1/np.abs(n/P+m*sign*alias_freqs)])
+        P2s.append(Ps)
+    return np.vstack(P2s)
+
 def generate_synthetic_lc(args, m0_data, amp_data, P_true, E_true, A_tmpl, Q_tmpl, 
                           amp_rescale=False, sig_amp = 0.1, rng = None):
     if rng is None: rng = np.random.default_rng()
@@ -84,9 +92,12 @@ def synthetic_curve_analysis(args_full, m0_data, amp_data, tmpl_name, template,
 def monte_carlo_aliasing_analysis(sid, templates, mode=None,
                                   N_period = 200, N_rep = 5, n_jobs=12, 
                                   random_state=0, sig_amp = 0.1,
-                                  verbose = False):
+                                  verbose = False, silence_warnings = True):
     cfg = get_data_config(mode)
     filters = cfg.filters; activated_bands = cfg.activated_bands; n_bands = cfg.n_bands
+
+    if silence_warnings:
+        warnings.filterwarnings(action='ignore')
     
     N_tmpls = len(templates)
     
