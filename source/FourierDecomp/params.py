@@ -22,14 +22,14 @@ DATA_CONFIGS = {
 # --- fourier series ---
 M_MIN = 3   # minimum Fourier series order
 M_MAX = 10  # Max fourier order
-ERR_FLOOR = 0.001
+ERR_FLOOR = 0.01
 
 # --- adaptive fitting ---
 THRESHOLD = 0.1    # threshold   
 
 # --- fitting range ---
 Amin, Amax = 0.05, 2 # [mag]
-pmin, pmax = 0.2, 150 # [days]
+pmin, pmax = 0.2, 300 # [days]
 delta_P_tol = 0.0001 # [days] 
 
 opt_method = 'lasso'
@@ -44,8 +44,8 @@ harmonics = 1 # maximum order of harmonics [P0, P0/n, n*P0]
 K = 5 # peak search for aliasing cleaning
 snr = 5 # relative peak strength for aliased frequency detection
 
-period_fit = False # fine-tune the Period simultaniously fitting with other LC parameters
-use_optim = True   # LSQ + optimization (chi2-minimization)
-adaptive_lam = True  # adjust regularization parameter automatically
+period_fit = False
+use_optim = True
+adaptive_lam = True
 
 init = 'rrfit' # lsq or rrfit

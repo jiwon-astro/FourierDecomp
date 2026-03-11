@@ -8,6 +8,7 @@ import pandas as pd
 from tqdm.notebook import tqdm
 
 from joblib import Parallel, delayed
+from joblib.externals.loky import get_reusable_executor
 
 from FourierDecomp.period_finder import robust_period_search
 from FourierDecomp.decomposition import calculate_m0_amp
@@ -105,7 +106,8 @@ def monte_carlo_aliasing_analysis(sid, templates, mode=None,
                 k+=1
     
     with Parallel(n_jobs=n_jobs, return_as="generator", 
-                  backend="multiprocessing", verbose=0) as parallel:
+                  backend="loky", verbose=0) as parallel:
+        # delayed: to allocate the parameter tuples to each Parallel instances 
         gen = parallel(delayed(synthetic_curve_analysis)(
                 args_full, m0_data, amp_data, tmpl_name, tmpl,
                 rng_seed=seed, sig_amp=sig_amp, n0=n0
@@ -114,9 +116,11 @@ def monte_carlo_aliasing_analysis(sid, templates, mode=None,
         results = [res for res in tqdm(gen, total=len(tasks), 
                                     disable=not verbose, desc="alias MC")]
         try:
-            parallel._backend.terminate()
+            #parallel._backend.terminate()
+            get_reusable_executor().shutdown(wait=True)
             print("processes are terminated")
         except Exception: 
             pass
+        
 
     return pd.DataFrame(results)
