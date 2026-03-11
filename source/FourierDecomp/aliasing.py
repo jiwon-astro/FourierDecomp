@@ -106,8 +106,7 @@ def monte_carlo_aliasing_analysis(sid, templates, mode=None,
                 tasks.append((tmpl_name, tmpl, seeds[k].generate_state(1)[0]))
                 k+=1
     
-    with Parallel(n_jobs=n_jobs, return_as="generator", 
-                  backend="multiprocessing", verbose=0) as parallel:
+    with Parallel(n_jobs=n_jobs, return_as="generator", verbose=0) as parallel:
         # delayed: to allocate the parameter tuples to each Parallel instances 
         gen = parallel(delayed(synthetic_curve_analysis)(
                 args_full, m0_data, amp_data, tmpl_name, tmpl,
@@ -133,7 +132,7 @@ def monte_carlo_aliasing_analysis(sid, templates, mode=None,
             for p in alive:
                 try: p.kill()
                 except Exception: pass
-            psutil.wait_procs(alive, timeout=timeout)
+            psutil.wait_procs(alive, timeout=3)
             print("processes are terminated")
 
     return pd.DataFrame(results)
