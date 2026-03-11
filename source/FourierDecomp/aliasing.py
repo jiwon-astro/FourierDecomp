@@ -26,7 +26,7 @@ def P_alias(P, alias_freqs, n=1, m=1):
     return np.vstack(P2s)
 
 def generate_synthetic_lc(args, m0_data, amp_data, P_true, E_true, A_tmpl, Q_tmpl, 
-                          amp_rescale=False, sig_amp = 0.1, rng = None):
+                          sig_amp = 0.1, rng = None):
     if rng is None: rng = np.random.default_rng()
     t, mag, emag, bmask = args
     M_tmpl = len(A_tmpl) # template dimension
@@ -39,7 +39,7 @@ def generate_synthetic_lc(args, m0_data, amp_data, P_true, E_true, A_tmpl, Q_tmp
 
     # random scaling factor
     scale = 1.0
-    if amp_rescale:
+    if sig_amp is not None:
         scale = np.exp(rng.normal(0., sig_amp)) #take exponential to ensure positive definite, close to unity -> but skewed distribution?
         amp_syn[valid] *= scale 
         amp_syn[~valid] = amp_syn[iref] # nan/zero -> using the same value as reference band amplitude
@@ -58,7 +58,7 @@ def generate_synthetic_lc(args, m0_data, amp_data, P_true, E_true, A_tmpl, Q_tmp
     return mag_syn, amp_syn, scale
 
 def synthetic_curve_analysis(args_full, m0_data, amp_data, tmpl_name, template,
-                             rng_seed=None, sig_amp=0.1, n0=5, K=1, harmonics=1,
+                             rng_seed=None, sig_amp=None, n0=5, K=1, harmonics=1,
                              silence_warnings=True):
     if silence_warnings:
         warnings.filterwarnings(action='ignore')
