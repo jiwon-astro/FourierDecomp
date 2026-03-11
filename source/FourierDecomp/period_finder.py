@@ -19,7 +19,7 @@ Nterms = 1 # truncated fourier series for Lomb-Scargle
 
 # Define Lomb-Scargle model (default Nbase = 1, Nband = 1) + Fast
 model = periodic.LombScargleMultibandFast(fit_period = True, Nterms=Nterms, 
-                                          optimizer_kwds={'quiet':True}, silence_warnings=True) 
+                                          optimizer_kwds={'quiet':True}) #MultibandFast -> silence_warnings=False option N/A
 model.optimizer.period_range = (pmin,pmax)
 
 def calc_fgrid(t, n0 = 5):
