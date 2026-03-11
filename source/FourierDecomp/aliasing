@@ -1,0 +1,107 @@
+import sys
+from pathlib import Path
+import numpy as np
+import matplotlib.pyplot as plt
+import pandas as pd
+
+from tqdm.notebook import tqdm
+
+from joblib import Parallel, delayed
+
+from FourierDecomp.period_finder import robust_period_search
+from FourierDecomp.decomposition import calculate_m0_amp
+from FourierDecomp.LSQ import F
+from FourierDecomp.IO import epoch_arrays, get_data_config
+from FourierDecomp.params import pmin, pmax, n0, ERR_FLOOR
+
+def generate_synthetic_lc(args, m0_data, amp_data, P_true, E_true, A_tmpl, Q_tmpl, 
+                          amp_rescale=False, sig_amp = 0.1, rng = None):
+    if rng is None: rng = np.random.default_rng()
+    # amplitude
+    amp_syn = amp_data.copy()
+    valid = np.isfinite(amp_data) & (amp_data > 0)
+    if not np.any(valid): amp_syn = np.ones_like(amp_data)
+    iref = np.where(valid)[0][0] # possibly
+
+    # random scaling factor
+    scale = 1.0
+    if amp_rescale:
+        scale = np.exp(rng.normal(0., sig_amp)) #take exponential to ensure positive definite, close to unity -> but skewed distribution?
+        amp_syn[valid] *= scale 
+        amp_syn[~valid] = amp_syn[iref] # nan/zero -> using the same value as reference band amplitude
+
+    # synthetic magnitude
+    mag_syn = np.zeros_like(t, dtype=np.float)
+    for i, m in enumerate(bmask):
+        t_ft, emag_ft = t[m], emag[m]
+        m0_ft, amp_ft = m0_data[i], amp_syn[i]
+        # evaluate template at observed epoch
+        theta_b = np.array([m0_ft, amp_ft, A_tmpl, Q_tmpl, P_true, E_true])
+        mag_syn_ft = F(theta_b, t_ft, M_fit=M_MAX)
+        noise_ft = rng.normal(0.0, np.maximum(emag_ft, ERR_FLOOR))
+        mag_syn[m] = mag_syn_ft + noise_ft
+
+    return mag_syn, amp_syn, scale
+
+def synthetic_curve_analysis(args, m0_data, amp_data, tmpl_name, template,
+                             rng_seed=None, sig_amp=0.1, n0=5, K=1, harmonics=1):
+    rng = np.random.default_rng(rng_seed) # set seed
+    
+    t, mag, emag, bmask = args
+    t0 = np.min(t)
+    
+    # random generated (Period, Epoch) - true value
+    P_true = np.exp(rng.uniform(np.log(pmin), np.log(pmax))) # random period
+    E_true = t0 + rng.uniform(0.0, P_true) # random epoch
+    
+    A_tmpl, Q_tmpl = template.A, template.Q
+    mag_syn, amp_syn, scale = generate_synthetic_lc(args, m0_data, amp_data, P_true, E_true,
+                                             A_tmpl, Q_tmpl, sig_amp=sig_amp, rng=rng)
+    Ps, Zs = robust_period_search(t, mag_syn, emag, bands,
+                                 n0=n0, K=K, harmonics=harmonics, plot=False)
+    
+    pidx = np.argmax(Zs)
+    P_recon = Ps[pidx]; Z_recon = Zs[pidx]
+    rel_err = (P_recon - P_true) / P_true
+    
+    rst = {'template': tmpl_name,
+           'P_true': P_true,'E_true': E_true,
+           'ampl_scale': scale,
+           'P_recon': P_recon, 'Z_recon': Z_recon,
+           'rel_err':rel_err}
+    
+    return rst
+
+def monte_carlo_aliasing_analysis(sid, templates, mode=None,
+                                  N_period = 200, N_rep = 5, n_jobs=12, 
+                                  random_state=0, sig_amp = 0.1,
+                                  verbose = False):
+    cfg = get_data_config(mode)
+    filters = cfg.filters; activated_bands = cfg.activated_bands; n_bands = cfg.n_bands
+    
+    N_tmpls = len(templates)
+    
+    t, mag, emag, bands = epoch_arrays(ls_data, sid, mode='gaia')
+    bmask = [(bands == band) for band in filters]
+    args = (t, mag, emag, bmask)
+    
+    # mean / peak-to-peak amplitude
+    m0_data, amp_data, _ = calculate_m0_amp(args) 
+    
+    tasks = []; k = 0
+    seed_seq = np.random.SeedSequence(random_state)
+    seeds = seed_seq.spawn(N_period * N_rep * N_tmpls)
+    for tmpl_name, tmpl in templates.items(): #presuming template dictionary
+        for _ in range(N_period):
+            for _ in range(N_rep):
+                tasks.append((tmpl_name, tmpl, seeds[k].generate_state(1)[0]))
+                k+=1
+    
+    parallel = Parallel(n_jobs=n_jobs, return_as="generator", verbose=0)
+    gen = parallel(delayed(synthetic_curve_analysis)(
+            args, m0_data, amp_data, tmpl_name, tmpl,
+            rng_seed=seed, sig_amp=sig_amp, n0=n0
+        ) for tmpl_name, tmpl, seed in tasks
+    )
+    results = [res for res in tqdm(gen, total=len(tasks), disable=not verbose, desc="alias MC")]
+    return pd.DataFrame(results)
