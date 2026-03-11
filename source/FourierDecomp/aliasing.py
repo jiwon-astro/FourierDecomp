@@ -1,3 +1,4 @@
+import os
 import sys
 from pathlib import Path
 import warnings
@@ -7,8 +8,8 @@ import pandas as pd
 
 from tqdm.notebook import tqdm
 
+import psutil
 from joblib import Parallel, delayed
-from joblib.externals.loky import get_reusable_executor
 
 from FourierDecomp.period_finder import robust_period_search
 from FourierDecomp.decomposition import calculate_m0_amp
@@ -106,21 +107,33 @@ def monte_carlo_aliasing_analysis(sid, templates, mode=None,
                 k+=1
     
     with Parallel(n_jobs=n_jobs, return_as="generator", 
-                  backend="loky", verbose=0) as parallel:
+                  backend="multiprocessing", verbose=0) as parallel:
         # delayed: to allocate the parameter tuples to each Parallel instances 
         gen = parallel(delayed(synthetic_curve_analysis)(
                 args_full, m0_data, amp_data, tmpl_name, tmpl,
                 rng_seed=seed, sig_amp=sig_amp, n0=n0
             ) for tmpl_name, tmpl, seed in tasks
         )
-        results = [res for res in tqdm(gen, total=len(tasks), 
-                                    disable=not verbose, desc="alias MC")]
         try:
-            #parallel._backend.terminate()
-            get_reusable_executor().shutdown(wait=True)
+            results = [res for res in tqdm(gen, total=len(tasks), 
+                                        disable=not verbose, desc="alias MC")]
+        finally:
+            try:
+                parallel._backend.terminate()
+            except Exception: 
+                pass
+            
+            parent = psutil.Process(os.getpid())
+            children = parent.children(recursive=True)
+            for p in children:
+                try: p.terminate()
+                except Exception: pass
+            gone, alive = psutil.wait_procs(children, timeout=3)
+            # killing proceses manually 
+            for p in alive:
+                try: p.kill()
+                except Exception: pass
+            psutil.wait_procs(alive, timeout=timeout)
             print("processes are terminated")
-        except Exception: 
-            pass
-        
 
     return pd.DataFrame(results)
