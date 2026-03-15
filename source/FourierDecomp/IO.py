@@ -86,7 +86,8 @@ def build_fd_header(mode = None):
     cols += [f"N_{b}" for b in active_filters]
     cols += [f"sig_{b}" for b in active_filters]
     cols += [f"rms_{b}" for b in active_filters]
-
+    cols += [f"gmax_{b}" for b in active_filters] # maximum phase gap folded by P0
+    
     # Period / fit summary
     cols += ["Zmax", "P0", "chi2", "P", "E", "phi_rise", "M_fit"]
 

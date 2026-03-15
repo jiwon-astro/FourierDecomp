@@ -105,7 +105,8 @@ def calculate_m0_amp(args, sigma = 3.0, maxiter = 5):
         else:
             w_ft = 1/np.maximum(emag_ft, ERR_FLOOR)**2
             n_prev = len(mag_ft)
-            m0_ft = np.average(mag_ft, weights = w_ft)
+            #m0_ft = np.average(mag_ft, weights = w_ft) # average: vulnerable for outlier
+            m0_ft = np.median(mag_ft)
             for _ in range(maxiter):
                 resmask = sigma_clip(mag_ft - m0_ft, sigma=sigma, masked=True).mask
                 m0_ft = np.average(mag_ft[~resmask], weights = w_ft[~resmask])
@@ -330,5 +331,5 @@ def fourier_decomp(sid, mode='ogle', init='lsq',
         print(f'ID = {sid} / Final M_fit = {M_fit_final} / CHI2 = {chi2_opt_final:.2f} / rrms = {rms[0]/sig[0]:.4f} / P = {P:.6f} days')
 
      #return m0, amp, A, Q, P, E, M_fit_final
-    row = [sid, pulsation, *N, *sig, *rms, Zmax, P0, chi2_opt_final, P, E, phi_rise, M_fit_final, *theta_params_out, flag]
+    row = [sid, pulsation, *N, *sig, *rms, *phase_gaps, Zmax, P0, chi2_opt_final, P, E, phi_rise, M_fit_final, *theta_params_out, flag]
     return row
