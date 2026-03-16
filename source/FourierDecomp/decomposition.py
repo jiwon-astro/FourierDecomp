@@ -204,7 +204,7 @@ def fourier_decomp(sid, mode='ogle', init='lasso',
         E0 = float(fit_row['EPOCH'])
         T_idx = int(fit_row['T'])
         tmpl = templates[f'T{T_idx}']
-        if verbose: print(f'RRFit best template = {tmpl}')
+        if verbose: print(f'RRFit best template:\n{tmpl}')
 
         A_tmp = np.zeros(M_MAX); Q_tmp = np.zeros(M_MAX)
         A_RRFIT = np.array(tmpl.A, dtype=float)
@@ -241,7 +241,7 @@ def fourier_decomp(sid, mode='ogle', init='lasso',
     for Pi, Zi in zip(P0s, Zs):
         #if Zi<0.2*Zmax: continue # non significant component
         # phase filling check
-        phase_gaps_i = np.array([phase_gap_score(t[mask], Pi, M_fit=M_MAX) for mask in bmask]) # maximum gap in phase domain
+        phase_gaps_i = np.array([phase_gap_score(t[mask], Pi, M_fit=M_fit_1) for mask in bmask]) # maximum gap in phase domain
         
         """
         theta_init = None
