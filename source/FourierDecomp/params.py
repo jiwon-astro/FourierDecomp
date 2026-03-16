@@ -28,12 +28,12 @@ snr = 5 # relative peak strength for aliased frequency detection
 # --- fourier series ---
 M_MIN = 3   # minimum Fourier series order
 M_MAX = 15  # Max fourier order
-M_PAD = 3 # scanning range above M_trunc
+M_PAD = 2 # scanning range above M_trunc
 ERR_FLOOR = 0.001
 
 # --- adaptive fitting ---
 THRESHOLD = 0.1    # threshold
-ORDER_BIC_TOL = 2.0 # BIC tolerence 
+ORDER_BIC_TOL = 10.0 # BIC tolerence 
 
 # --- fitting range ---
 # Peak-to-peak amplitude range for each band [mag]
@@ -56,8 +56,8 @@ lam0 = 1e-2 # regularization coeff
 lam_min = 1e-4
 lam_max = 5e-2
 
-lam_spike = 1e-2 # spike penalty weight
-lam_h     = 1e-3 # harmonic penalty weight
+lam_spike = 1e-1 # spike penalty weight
+lam_h     = 20 # harmonic penalty weight
 
 period_fit   = False
 use_optim    = True
