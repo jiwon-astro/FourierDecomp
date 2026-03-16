@@ -41,7 +41,7 @@ Amin, Amax = 0.05, 2
 # Harmonic coefficient bounds A_j [shape coefficients]
 # Scalar -> same bound for every harmonic
 # Array   -> order-dependent bounds (A1, A2, ...)
-Amin_harmonic = 0.0
+Amin_harmonic = 0.0 # always
 Amax_harmonic = 2.0
 
 pmin, pmax = 0.2, 300 # [days]

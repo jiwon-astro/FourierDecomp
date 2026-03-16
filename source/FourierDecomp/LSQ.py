@@ -16,11 +16,11 @@ def _coef_mode(coef_mode=None):
 
 def _harmonic_bounds(M_fit, coef_mode=None):
     coef_mode =_coef_mode(coef_mode)
-    Amin = getattr(params, "Amin_harmonic", 0.0)
-    Amax = getattr(params, "Amax_harmonic", getattr(params, "Amax", 2.0))
-    Amin = np.broadcast_to(np.asarray(Amin, dtype=float), (M_fit,)).copy()
+    Amax = getattr(params, "Amax_harmonic", getattr(params, "Amax", 1.0))
     Amax = np.broadcast_to(np.asarray(Amax, dtype=float), (M_fit,)).copy()
-    if coef_mode=='AQ': return list(zip(Amin, Amax))
+    if coef_mode=='AQ': 
+        Q_bounds =  [(0, 2 * np.pi)] * M_fit
+        return list(zip(0, Amax)) + Q_bounds
     else: return [(-u, u) for u in Amax]*2 
 
 def AQ_to_ab(A,Q):
@@ -263,7 +263,7 @@ def LSQ_fit(P0, args, M_fit, activated_bands, opt_method = 'lsq',
                 else: theta_ft = np.hstack([m0_ft, alpha_ft, beta_ft, E0])
                 
                 # bounds_single: [m0, A1..AM, Q1..QM, E]
-                bounds_single = [(-np.inf, np.inf)] + _harmonic_bounds(M_fit, coef_mode=coef_mode) + [(0, 2 * np.pi)] * M_fit + [(E0 - P0, E0 + P0)]
+                bounds_single = [(-np.inf, np.inf)] + _harmonic_bounds(M_fit, coef_mode=coef_mode) + [(E0 - P0, E0 + P0)]
         
                 res = minimize(chisq_single, theta_ft,
                                args=(t_ft, mag_ft, emag_ft, M_fit, P0, False, True), 

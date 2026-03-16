@@ -98,11 +98,10 @@ def _fit_wrapper(P0, args, M_fit, bounds_full, activated_bands, phase_gaps,
 def _build_bounds(n_bands, M_fit, coef_mode=None):
     m_bounds = [(-np.inf, np.inf)] * n_bands
     a_bounds = [(params.Amin, params.Amax)] * n_bands
-    A_bounds = _harmonic_bounds(M_fit, coef_mode=coef_mode)
-    Q_bounds = [(0.0, 2.0 * np.pi)] * M_fit
+    coef_bounds = _harmonic_bounds(M_fit, coef_mode=coef_mode)
     P_bounds = [(params.pmin, params.pmax)] # (temporary)
     E_bounds = [(-np.inf, np.inf)] # (temporary)
-    return m_bounds + a_bounds + A_bounds + Q_bounds + P_bounds + E_bounds
+    return m_bounds + a_bounds + coef_bounds + P_bounds + E_bounds
 
 def calculate_m0_amp(args, sigma = 3.0, maxiter = 5):
     # calculate 1) mean magnitude and 2) peak-to-peak amplitude from multi-band epoch photometry
