@@ -150,7 +150,7 @@ def select_order(P0, args, activated_bands, phase_gaps, M_trunc,
         score = bic(chi2_red_opt, len(t), len(theta_opt)) # BIC score
         candidates.append((M_fit, score, chi2_red_opt, obj_opt, theta_opt))
         if verbose:
-            print(f"M = {M_fit:2d} / obj = {obj_opt:.4e} / score = {score:.4e}")
+            print(f"[Order scanning] M = {M_fit:2d} / obj = {obj_opt:.2f} / score = {score:.2f}")
     scores = np.array([x[1] for x in candidates])
     best_idx = int(np.argmin(scores))
     best_score = scores[best_idx]
