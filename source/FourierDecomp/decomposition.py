@@ -71,7 +71,7 @@ def _fit_wrapper(P0, args, M_fit, bounds_full, activated_bands, phase_gaps,
         lam = adjust_lambda(params.lam0, gmax, M_fit, N_eff, lam_min=params.lam_min, lam_max=params.lam_max) # set first band as pivotal band
         if verbose: print(f'phase_gap_max = {phase_gaps} / N_ft = {N_fts} / lam = {lam:.2e}')
     theta0 = LSQ_fit(P0, args, M_fit, activated_bands, phase_flag=phase_flag, 
-                        opt_method = params.opt_method, lam = lam)
+                        opt_method = params.opt_method, lam = lam, quality_weight=params.quality_weight)
 
     P_init, E_init = theta0[-2], theta0[-1]
     if period_fit:
@@ -138,7 +138,8 @@ def select_order(P0, args, activated_bands, phase_gaps, M_trunc,
     n_bands = len(activated_bands)
     coef_mode = _coef_mode() # use default
     candidates = []
-    M_list = np.arange(params.M_MIN, M_trunc+1)
+    M_ub = min([params.M_MAX, M_trunc + params.M_PAD])
+    M_list = np.arange(params.M_MIN, M_ub+1)
     for M_fit in M_list:
         bounds = _build_bounds(n_bands, M_fit, coef_mode=coef_mode)
         theta_opt, obj_opt = _fit_wrapper(P0, args, M_fit, bounds, activated_bands, phase_gaps,

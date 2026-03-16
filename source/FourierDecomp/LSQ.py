@@ -7,7 +7,6 @@ from sklearn.linear_model import Lasso
 
 from . import params
 
-
 # === helper functions ===
 def _coef_mode(coef_mode=None):
     if coef_mode is None: # (A,Q) or (alpha, beta)
@@ -220,7 +219,7 @@ def chisq(theta, t, mag, emag, bmask, M_fit, n_dim, activated_bands, coef_mode=N
     return summ / dof # Reduced chi-square
 
 # === LSQ fits ===
-def LSQ_fit(P0, args, M_fit, activated_bands, opt_method = 'lsq',
+def LSQ_fit(P0, args, M_fit, activated_bands, opt_method='lsq', quality_weight=False,
              bounds=None, phase_flag=None, Nmin=50, lam=1e-3, coef_mode=None): # M_fit
     # phase_flag: having a large phase gap in the phase-folded light curve
     coef_mode = _coef_mode(coef_mode)
@@ -293,13 +292,23 @@ def LSQ_fit(P0, args, M_fit, activated_bands, opt_method = 'lsq',
         
         m0[i] = m0_ft
         amp0[i] = scale
+
+
+        w_band = 1.0
+        if quality_weight:
+            # evaluate residual 
+            theta_ft = [m0_ft, 1, alpha_ft, beta_ft, P0, E0] 
+            fval = F(theta_ft, t_ft, M_fit, coef_mode='ab')
+            resid_ft = mag_ft - fval
+            rms = np.sqrt(np.average(resid_ft**2, weights=w_ft))
+            w_band = 1/rms**2
         
         if (not phase_flag[ib]) or (phase_flag[ib] and res_success):
             # phase_flag = False -> LSQ fit only (its sufficient)
             # phase_flag = True -> secondary fitting with minimization -> reliable peak-to-peak amplitude from best fit solution
             alpha_accum += alpha_ft / scale
             beta_accum += beta_ft / scale
-            count += 1
+            count += w_band
 
     valid = count > 0
     alpha0 = np.zeros(M_fit)

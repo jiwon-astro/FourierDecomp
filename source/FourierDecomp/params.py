@@ -28,6 +28,7 @@ snr = 5 # relative peak strength for aliased frequency detection
 # --- fourier series ---
 M_MIN = 3   # minimum Fourier series order
 M_MAX = 15  # Max fourier order
+M_PAD = 3 # scanning range above M_trunc
 ERR_FLOOR = 0.001
 
 # --- adaptive fitting ---
@@ -48,6 +49,7 @@ pmin, pmax = 0.2, 300 # [days]
 delta_P_tol = 0.0001 # [days]
 
 coef_mode = 'ab' # ab (alpha, beta) or AQ (A, Q)
+quality_weight = True # photometric quality weight based on residual
 
 opt_method = 'lasso'
 lam0 = 1e-2 # regularization coeff
