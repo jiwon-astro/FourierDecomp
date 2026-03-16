@@ -262,9 +262,18 @@ def LSQ_fit(P0, args, M_fit, activated_bands, opt_method = 'lsq',
                     A_ft, Q_ft = ab_to_AQ(alpha_ft, beta_ft)
                     theta_ft = np.hstack([m0_ft, A_ft, Q_ft, E0]) # amp=1 (False) 기준
                 else: theta_ft = np.hstack([m0_ft, alpha_ft, beta_ft, E0])
-                print(theta_ft.shape, 2*M_fit+1+1)
+
                 # bounds_single: [m0, A1..AM, Q1..QM, E]
-                bounds_single = [(-np.inf, np.inf)] + _harmonic_bounds(M_fit, coef_mode=coef_mode) + [(E0 - P0, E0 + P0)]
+                hb = _harmonic_bounds(M_fit, coef_mode=coef_mode)
+                bounds_single = [(-np.inf, np.inf)] + hb + [(E0 - P0, E0 + P0)]
+
+                # dimensionality check
+                if len(bounds_single) != len(theta_ft):
+                    raise ValueError(
+                        f"bounds/theta mismatch: theta_ft: dim = {len(theta_ft)}, "
+                        f"bounds_single: dim = {len(bounds_single)}, "
+                        f"coef_mode = {coef_mode}, M_fit = {M_fit}, hb = {len(hb)}"
+                    )
 
                 res = minimize(chisq_single, theta_ft,
                                args=(t_ft, mag_ft, emag_ft, M_fit, P0, False, True), 
