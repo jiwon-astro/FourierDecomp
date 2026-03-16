@@ -21,7 +21,7 @@ def eval_on_grid(theta, n_bands, M_fit, n_grid = 200, coef_mode=None):
     phi_grid = np.arange(0, 1, 1/n_grid)
     # unpack theta
     _, amp, c1, c2, P, E = unpack_theta(theta, n_bands, M_fit=M_fit, include_amp=True, coef_mode=coef_mode)
-    theta_rev = np.array([0, amp[0], c1, c2, 1., (E/P)%1], dtype=object) # unit period + phase offset, enough to use single band
+    theta_rev = np.array([0, 1.0, c1, c2, 1., (E/P)%1], dtype=object) # unit period/amplitude + phase offset, enough to use single band
     fval  = F(theta_rev, phi_grid, M_fit, coef_mode=coef_mode)
     return phi_grid, fval
 
@@ -253,9 +253,9 @@ def fourier_decomp(sid, mode='ogle', init='lasso',
                                                period_fit=period_fit, use_optim=use_optim, adaptive_lam=adaptive_lam, verbose=verbose)
                                                #theta0=theta_init)
         if verbose:
-            print(f"{Pi:.4f} days / chi2 = {chi2_1_tmp:.4f}")
+            print(f"{Pi:.4f} days / gmax = {phase_gaps_i} / chi2 = {chi2_1_tmp:.4f}")
         if np.isfinite(chi2_1_tmp) and chi2_opt_1 > chi2_1_tmp: 
-            if not np.isclose(Pi, P0, rtol = 0.01) and (chi2_opt_1 - chi2_1_tmp) < 5: # compare degree of improvement
+            if not np.isclose(Pi, P0, rtol = 0.01) and (chi2_opt_1 - chi2_1_tmp) < 3: # compare degree of improvement
                 continue
             theta_opt_1 = theta_1_tmp
             chi2_opt_1 = chi2_1_tmp
