@@ -256,7 +256,7 @@ def fourier_decomp(sid, mode='ogle', init='lasso',
         if verbose:
             print(f"{Pi:.4f} days / gmax = {phase_gaps_i} / chi2 = {chi2_1_tmp:.4f}")
         if np.isfinite(chi2_1_tmp) and chi2_opt_1 > chi2_1_tmp: 
-            if not np.isclose(Pi, P0, rtol = 0.01) and (chi2_opt_1 - chi2_1_tmp) < 3: # compare degree of improvement
+            if not np.isclose(Pi, P0, rtol = 0.01) and (chi2_opt_1 - chi2_1_tmp) < 5: # compare degree of improvement
                 continue
             theta_opt_1 = theta_1_tmp
             chi2_opt_1 = chi2_1_tmp
@@ -344,7 +344,9 @@ def fourier_decomp(sid, mode='ogle', init='lasso',
     A_out[:M_fit_final] = A_fit
     Q_out[:M_fit_final] = Q_fit
     tmpl_amplitude = peak_to_peak_amplitude(A_fit, Q_fit, M_fit=M_fit_final, coef_mode='AQ')
-    
+    A_out /= tmpl_amplitude
+    amp *= tmpl_amplitude
+
     theta_params_out = np.hstack([m0, amp, A_out, Q_out])
     
     flag = 0
@@ -374,7 +376,7 @@ def fourier_decomp(sid, mode='ogle', init='lasso',
         rms[i] = np.sqrt(np.average(resid_ft**2, weights=w_ft))
 
         # parameter boundary excession check (peak-to-peak amplitude only)
-        amp_ptp_ft = amp[i] * tmpl_amplitude
+        amp_ptp_ft = amp[i]
         amp_lb, amp_ub = params.Amin, params.Amax
         if (amp_ptp_ft > amp_ub) or (amp_ptp_ft < amp_lb): flag = 1
         m_lb, m_ub = min(mag_ft), max(mag_ft)
