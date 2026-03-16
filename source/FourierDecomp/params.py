@@ -42,7 +42,7 @@ Amin, Amax = 0.05, 2
 # Scalar -> same bound for every harmonic
 # Array   -> order-dependent bounds (A1, A2, ...)
 Amin_harmonic = 0.0 # always
-Amax_harmonic = 2.0
+Amax_harmonic = 1.5
 
 pmin, pmax = 0.2, 300 # [days]
 delta_P_tol = 0.0001 # [days]

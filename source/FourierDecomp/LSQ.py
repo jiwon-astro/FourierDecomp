@@ -19,8 +19,9 @@ def _harmonic_bounds(M_fit, coef_mode=None):
     Amax = getattr(params, "Amax_harmonic", getattr(params, "Amax", 1.0))
     Amax = np.broadcast_to(np.asarray(Amax, dtype=float), (M_fit,)).copy()
     if coef_mode=='AQ': 
+        A_bounds = list(zip(np.zeros(M_fit), Amax))
         Q_bounds =  [(0, 2 * np.pi)] * M_fit
-        return list(zip(0, Amax)) + Q_bounds
+        return A_bounds + Q_bounds
     else: return [(-u, u) for u in Amax]*2 
 
 def AQ_to_ab(A,Q):
@@ -186,7 +187,7 @@ def peak_to_peak_amplitude(c1, c2, Nx=1001, M_fit=None, coef_mode=None): # M_fit
     t = np.linspace(0, 1, Nx)
     theta = (0.0, 1.0, c1, c2, 1.0, 0.0)
     fval = F(theta, t, M_fit, coef_mode=coef_mode)
-    amp = np.diff(np.percentile(fval,[1, 99])) # 1-99 percentile
+    amp = np.diff(np.percentile(fval,[1, 99]))[0] # 1-99 percentile
     #amp = np.max(fval) - np.min(fval) # P-t-P
     return amp
 
@@ -264,8 +265,6 @@ def LSQ_fit(P0, args, M_fit, activated_bands, opt_method = 'lsq',
                 print(theta_ft.shape, 2*M_fit+1+1)
                 # bounds_single: [m0, A1..AM, Q1..QM, E]
                 bounds_single = [(-np.inf, np.inf)] + _harmonic_bounds(M_fit, coef_mode=coef_mode) + [(E0 - P0, E0 + P0)]
-                print(len(bounds_single))
-
 
                 res = minimize(chisq_single, theta_ft,
                                args=(t_ft, mag_ft, emag_ft, M_fit, P0, False, True), 

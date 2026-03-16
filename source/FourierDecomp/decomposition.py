@@ -21,7 +21,7 @@ def eval_on_grid(theta, n_bands, M_fit, n_grid = 200, coef_mode=None):
     phi_grid = np.arange(0, 1, 1/n_grid)
     # unpack theta
     _, amp, c1, c2, P, E = unpack_theta(theta, n_bands, M_fit=M_fit, include_amp=True, coef_mode=coef_mode)
-    theta_rev = np.array([0, amp[0], c1, c2, 1., (E/P)%1]) # unit period + phase offset, enough to use single band
+    theta_rev = np.array([0, amp[0], c1, c2, 1., (E/P)%1], dtype=object) # unit period + phase offset, enough to use single band
     fval  = F(theta_rev, phi_grid, M_fit, coef_mode=coef_mode)
     return phi_grid, fval
 
@@ -145,8 +145,10 @@ def select_order(P0, args, activated_bands, phase_gaps, M_trunc,
                                           period_fit=period_fit, use_optim=use_optim,
                                           adaptive_lam=adaptive_lam, verbose=False) # obj_opt != chi2
         _, fval_grid = eval_on_grid(theta_opt, n_bands, M_fit, coef_mode=coef_mode)
-        score = bic(obj_opt, len(t), len(theta_opt)) # BIC score
-        candidates.append((M_fit, score, obj_opt, theta_opt))
+        chi2_red_opt = chisq(theta_opt, *args, M_fit, len(theta_opt),
+                              activated_bands, coef_mode=coef_mode)
+        score = bic(chi2_red_opt, len(t), len(theta_opt)) # BIC score
+        candidates.append((M_fit, score, chi2_red_opt, obj_opt, theta_opt))
         if verbose:
             print(f"M = {M_fit:2d} / obj = {obj_opt:.4e} / score = {score:.4e}")
     scores = np.array([x[1] for x in candidates])
@@ -155,8 +157,8 @@ def select_order(P0, args, activated_bands, phase_gaps, M_trunc,
     near = [x for x in candidates if (x[1] - best_score) <= getattr(params, 'ORDER_BIC_TOL', 2.0)]
     # tie-breaker: closest to M_trunc, then smaller order
     near.sort(key=lambda x: (abs(x[0] - M_trunc), x[0])) # x[0]: M_fit
-    M_fit, score, obj_opt, theta_opt = near[0]
-    return M_fit, theta_opt, obj_opt, score, candidates
+    M_fit, score, chi2_red_opt, obj_opt, theta_opt = near[0]
+    return M_fit, theta_opt, chi2_red_opt, obj_opt, score
 
 # === Main Function ===
 def fourier_decomp(sid, mode='ogle', init='lasso',
@@ -289,7 +291,7 @@ def fourier_decomp(sid, mode='ogle', init='lasso',
             
     M_fit_2 = M_trunc
 
-    M_fit_final, theta_opt_final, obj_opt_final, score_opt_final = select_order(
+    M_fit_final, theta_opt_final, chi2_opt_final, obj_opt_final, score_final = select_order(
         P0, args, activated_bands, phase_gaps, M_trunc,
         period_fit=period_fit, use_optim=use_optim,
         adaptive_lam=adaptive_lam, verbose=verbose)
@@ -386,8 +388,9 @@ def fourier_decomp(sid, mode='ogle', init='lasso',
         """
 
     if verbose:
-        print(f'ID = {sid} / Final M_fit = {M_fit_final} / CHI2 = {obj_opt_final:.2f} / rrms = {rms[0]/sig[0]:.4f} / P = {P:.6f} days')
+        print(f'ID = {sid} / Final M_fit = {M_fit_final} / CHI2 = {chi2_opt_final:.2f} / F_obj = {obj_opt_final:.2f} / rrms = {rms[0]/sig[0]:.4f} / P = {P:.6f} days')
 
      #return m0, amp, A, Q, P, E, M_fit_final
-    row = [sid, pulsation, *N, *sig, *rms, *phase_gaps, Zmax, P0, obj_opt_final, P, E, phi_rise, M_fit_final, *theta_params_out, flag]
+    row = [sid, pulsation, *N, *sig, *rms, *phase_gaps, Zmax, P0, chi2_opt_final, obj_opt_final, 
+           P, E, phi_rise, M_fit_final, *theta_params_out, flag]
     return row

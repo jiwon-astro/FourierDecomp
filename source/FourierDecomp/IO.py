@@ -89,7 +89,7 @@ def build_fd_header(mode = None):
     cols += [f"gmax_{b}" for b in active_filters] # maximum phase gap folded by P0
     
     # Period / fit summary
-    cols += ["Zmax", "P0", "chi2", "P", "E", "phi_rise", "M_fit"]
+    cols += ["Zmax", "P0", "chi2", "fobj", "P", "E", "phi_rise", "M_fit"]
 
     # Theta params (match decomposition.py theta_params_out ordering)
     cols += [f"m0_{b}" for b in active_filters]
