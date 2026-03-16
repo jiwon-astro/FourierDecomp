@@ -342,6 +342,7 @@ def fourier_decomp(sid, mode='ogle', init='lasso',
     Q_out = np.zeros(M_MAX)
     A_out[:M_fit_final] = A_fit
     Q_out[:M_fit_final] = Q_fit
+    tmpl_amplitude = peak_to_peak_amplitude(A_fit, Q_fit, M_fit=M_fit_final, coef_mode='AQ')
     
     theta_params_out = np.hstack([m0, amp, A_out, Q_out])
     
@@ -372,7 +373,7 @@ def fourier_decomp(sid, mode='ogle', init='lasso',
         rms[i] = np.sqrt(np.average(resid_ft**2, weights=w_ft))
 
         # parameter boundary excession check (peak-to-peak amplitude only)
-        amp_ptp_ft = amp[i] * peak_to_peak_amplitude(A_fit, Q_fit, M_fit=M_fit_final, coef_mode='AQ')[0]
+        amp_ptp_ft = amp[i] * tmpl_amplitude
         amp_lb, amp_ub = params.Amin, params.Amax
         if (amp_ptp_ft > amp_ub) or (amp_ptp_ft < amp_lb): flag = 1
         m_lb, m_ub = min(mag_ft), max(mag_ft)
