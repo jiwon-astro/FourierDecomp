@@ -1,16 +1,12 @@
 import numpy as np
 
-from scipy.signal import find_peaks
 from scipy.optimize import minimize
-
 from astropy.stats import sigma_clip
 
-from gatspy import periodic # multiband lomb-scargle
-
-from .params import M_MAX, M_MIN, Amin, Amax, pmin, pmax, n0, K, harmonics, snr, opt_method, lam0, lam_min, lam_max, w_spike, THRESHOLD, ERR_FLOOR
+from . import params
 from .LC import phase_gap_score
 from .IO import epoch_arrays, get_data_config 
-from .LSQ import F, LSQ_fit, chisq, chisq_single, unpack_theta
+from .LSQ import F, LSQ_fit, chisq, unpack_theta, peak_to_peak_amplitude, _coef_mode, _harmonic_bounds, theta_to_AQ
 from .period_finder import robust_period_search
 
 import warnings
@@ -21,24 +17,40 @@ def bic(reduced_chi2, N, k):
     chi2 = reduced_chi2 * dof
     return chi2 + k * np.log(max(N, 1))
 
-def eval_on_grid(theta, n_bands, M_fit, n_grid = 200, unpack=True):
+def eval_on_grid(theta, n_bands, M_fit, n_grid = 200, coef_mode=None):
     phi_grid = np.arange(0, 1, 1/n_grid)
-    _, amp, A, Q, P, E = unpack_theta(theta, n_bands, M_fit=M_fit, include_amp=True)
-    theta_rev = np.array([0, amp[0], A, Q, 1., (E/P)%1]) # unit period + phase offset, enough to use single band
-    fval  = F(theta_rev, phi_grid, M_fit)
+    # unpack theta
+    _, amp, c1, c2, P, E = unpack_theta(theta, n_bands, M_fit=M_fit, include_amp=True, coef_mode=coef_mode)
+    theta_rev = np.array([0, amp[0], c1, c2, 1., (E/P)%1]) # unit period + phase offset, enough to use single band
+    fval  = F(theta_rev, phi_grid, M_fit, coef_mode=coef_mode)
     return phi_grid, fval
 
-def spike_penalty(fval, ratio = 0.05):
+def spike_penalty(theta, n_bands, M_fit, coef_mode=None, n_grid=200, ratio = 0.05):
     # model value at uniform grid
+    _, fval = eval_on_grid(theta, n_bands, M_fit, n_grid=n_grid, coef_mode=coef_mode)
     d2 = np.diff(fval, n=2)
-    pk_max = np.max(np.abs(d2)) # spike
-    pk_tot = np.sum(np.abs(d2)) # total variance
-    return pk_max + ratio * pk_tot
+    return np.mean(d2**2)
+    #pk_max = np.max(np.abs(d2)) # spike
+    #pk_tot = np.sum(np.abs(d2)) # total variance
+    #return pk_max + ratio * pk_tot
+
+def harmonics_penalty(theta, n_bands, M_fit, coef_mode=None):
+    _, _, c1, c2, _, _ = unpack_theta(theta, n_bands, M_fit=M_fit, include_amp=True, coef_mode=coef_mode)
+    orders2 = (1.0 + np.arange(M_fit))**4
+    return np.sum(orders2 * (c1**2 + c2**2))
 
 def adjust_lambda(lam0, gmax, M_fit, N, lam_min = 1e-5, lam_max = 1e-1):
     # Heuristic function to adjust regularization weight
     lam = lam0 * (max(gmax, 0.05) / 0.12)**3 * (M_fit / 5.0)**2 * (30/max(N, 10))
-    return float(np.clip(lam, lam_min, lam_max))   
+    return np.clip(lam, lam_min, lam_max)
+
+def fit_objective(theta, t, mag, emag, bmask, M_fit, n_dim, activated_bands,
+                  lam_spike=0.0, lam_h=0.0, coef_mode=None):
+    n_bands = len(activated_bands)
+    chi2_red = chisq(theta, t, mag, emag, bmask, M_fit, n_dim, activated_bands, coef_mode=coef_mode)
+    pen_spike = spike_penalty(theta, n_bands, M_fit, coef_mode=coef_mode) # spike penalty
+    pen_h = harmonics_penalty(theta, n_bands, M_fit, coef_mode=coef_mode) # harmonics penalty
+    return chi2_red + lam_spike * pen_spike + lam_h * pen_h 
 
 def _fit_wrapper(P0, args, M_fit, bounds_full, activated_bands, phase_gaps, 
                 period_fit=False, use_optim=False, adaptive_lam=True, verbose=False):
@@ -47,47 +59,49 @@ def _fit_wrapper(P0, args, M_fit, bounds_full, activated_bands, phase_gaps,
     """
     t, mag, emag, bmask = args
     n_bands = len(activated_bands)
+    coef_mode = _coef_mode() # use default
     n_dim = 2 * n_bands + 2 * M_fit + 2 # n_dim 
     
-    # initial parameter
+    # initial parameter - band별 계산 후 평균
     phase_flag = (phase_gaps > 0.05)
-    lam = lam0
+    N_fts = np.sum(bmask, axis = 1); N_eff = N_fts.max()
+    lam = params.lam0
     if adaptive_lam:
         gmax = phase_gaps[activated_bands].max()
-        N_fts = np.sum(bmask, axis = 1); N_ft_max = N_fts.max()
-        lam = adjust_lambda(lam0, gmax, M_fit, N_ft_max, lam_min=lam_min, lam_max=lam_max) # set first band as pivotal band
+        lam = adjust_lambda(params.lam0, gmax, M_fit, N_eff, lam_min=params.lam_min, lam_max=params.lam_max) # set first band as pivotal band
         if verbose: print(f'phase_gap_max = {phase_gaps} / N_ft = {N_fts} / lam = {lam:.2e}')
     theta0 = LSQ_fit(P0, args, M_fit, activated_bands, phase_flag=phase_flag, 
-                        opt_method = opt_method, lam = lam)
+                        opt_method = params.opt_method, lam = lam)
 
     P_init, E_init = theta0[-2], theta0[-1]
     if period_fit:
         # P와 E의 bound를 theta0
-        bounds_full[-2] = (max(P_init * 0.9, pmin), min(P_init * 1.1, pmax)) # P 범위
+        bounds_full[-2] = (max(P_init * 0.9, params.pmin), min(P_init * 1.1, params.pmax)) # P 범위
     else: bounds_full[-2] = (P_init, P_init)
     bounds_full[-1] = (E_init - P_init, E_init + P_init)     # E 범위
 
     # 2. Global minimization
     if use_optim:
-        res = minimize(chisq, theta0,
-                    args=(t, mag, emag, bmask, M_fit, n_dim, activated_bands),
+        res = minimize(fit_objective, theta0,
+                    args=(t, mag, emag, bmask, M_fit, n_dim, activated_bands,
+                          params.lam_spike, params.lam_h, coef_mode),
                     method='L-BFGS-B',
                     bounds=bounds_full)
         if res.success:
             return res.x, res.fun #, M_fit, n_dim
         
     # optimization failure
-    chi2_init = chisq(theta0, *args, M_fit=M_fit, n_dim=n_dim, activated_bands=activated_bands)
+    chi2_init = fit_objective(theta0, *args, M_fit=M_fit, n_dim=n_dim, activated_bands=activated_bands,
+                              lam_spike=params.lam_spike, lam_h=params.lam_h, coef_mode=coef_mode)
     return theta0, chi2_init #, M_fit, n_dim
 
-
-def _build_bounds(n_bands, M_fit):
+def _build_bounds(n_bands, M_fit, coef_mode=None):
     m_bounds = [(-np.inf, np.inf)] * n_bands
-    a_bounds = [(Amin, Amax)] * n_bands
-    A_bounds = [(Amin, Amax)] * M_fit
-    Q_bounds = [(0, 2 * np.pi)] * M_fit
-    P_bounds = [(pmin, pmax)] # (임시)
-    E_bounds = [(-np.inf, np.inf)] # (임시)
+    a_bounds = [(params.Amin, params.Amax)] * n_bands
+    A_bounds = _harmonic_bounds(M_fit, coef_mode=coef_mode)
+    Q_bounds = [(0.0, 2.0 * np.pi)] * M_fit
+    P_bounds = [(params.pmin, params.pmax)] # (temporary)
+    E_bounds = [(-np.inf, np.inf)] # (temporary)
     return m_bounds + a_bounds + A_bounds + Q_bounds + P_bounds + E_bounds
 
 def calculate_m0_amp(args, sigma = 3.0, maxiter = 5):
@@ -103,7 +117,7 @@ def calculate_m0_amp(args, sigma = 3.0, maxiter = 5):
             m0_ft = np.nan; Amp_ft = np.nan
             resmask = np.zeros_like(m, dtype=bool)
         else:
-            w_ft = 1/np.maximum(emag_ft, ERR_FLOOR)**2
+            w_ft = 1/np.maximum(emag_ft, params.ERR_FLOOR)**2
             n_prev = len(mag_ft)
             #m0_ft = np.average(mag_ft, weights = w_ft) # average: vulnerable for outlier
             m0_ft = np.median(mag_ft)
@@ -119,14 +133,45 @@ def calculate_m0_amp(args, sigma = 3.0, maxiter = 5):
         resmasks.append(resmask)
     return m0s, A0s, resmasks
 
+def select_order(P0, args, activated_bands, phase_gaps, M_trunc,
+                 period_fit=False, use_optim=False, adaptive_lam=False, verbose=False):
+    t = args[0]
+    n_bands = len(activated_bands)
+    coef_mode = _coef_mode() # use default
+    candidates = []
+    M_list = np.arange(params.M_MIN, M_trunc+1)
+    for M_fit in M_list:
+        bounds = _build_bounds(n_bands, M_fit, coef_mode=coef_mode)
+        theta_opt, obj_opt = _fit_wrapper(P0, args, M_fit, bounds, activated_bands, phase_gaps,
+                                          period_fit=period_fit, use_optim=use_optim,
+                                          adaptive_lam=adaptive_lam, verbose=False) # obj_opt != chi2
+        _, fval_grid = eval_on_grid(theta_opt, n_bands, M_fit, coef_mode=coef_mode)
+        score = bic(obj_opt, len(t), len(theta_opt)) # BIC score
+        candidates.append((M_fit, score, obj_opt, theta_opt))
+        if verbose:
+            print(f"M = {M_fit:2d} / obj = {obj_opt:.4e} / score = {score:.4e}")
+    scores = np.array([x[1] for x in candidates])
+    best_idx = int(np.argmin(scores))
+    best_score = scores[best_idx]
+    near = [x for x in candidates if (x[1] - best_score) <= getattr(params, 'ORDER_BIC_TOL', 2.0)]
+    # tie-breaker: closest to M_trunc, then smaller order
+    near.sort(key=lambda x: (abs(x[0] - M_trunc), x[0])) # x[0]: M_fit
+    M_fit, score, obj_opt, theta_opt = near[0]
+    return M_fit, theta_opt, obj_opt, score, candidates
+
 # === Main Function ===
-def fourier_decomp(sid, mode='ogle', init='lsq',
-                   period_fit=False, use_optim=False, adaptive_lam=True,
-                   verbose=False, plot_LS=False, K=K, harmonics=harmonics, w_spike=w_spike):
+def fourier_decomp(sid, mode='ogle', init='lasso',
+                   period_fit=False, use_optim=False, adaptive_lam=False,
+                   verbose=False, plot_LS=False, K=None, harmonics=None):
     # Load data
     if mode is None: mode = get_data_config().mode
     cfg = get_data_config(mode)
     filters = cfg.filters; activated_bands = cfg.activated_bands; n_bands = cfg.n_bands
+
+    M_MAX, M_MIN = params.M_MAX, params.M_MIN
+
+    if K is None: K = params.K
+    if harmonics is None: harmonics = params.harmonics
 
     if mode=='ogle':
         sid_mask = (df_ident['ID'] == sid)
@@ -138,7 +183,6 @@ def fourier_decomp(sid, mode='ogle', init='lsq',
         pulsation = f'{cep_type}_{osc_type}'
 
     t, mag, emag, bands = epoch_arrays(ls_data, sid, mode=mode)
-    #t, mag, emag, bands = [data[key].values for key in [*phot_names, 'band']]
     bmask = [(bands == band) for band in filters]
     args = (t, mag, emag, bmask)
 
@@ -161,6 +205,7 @@ def fourier_decomp(sid, mode='ogle', init='lsq',
         E0 = float(fit_row['EPOCH'])
         T_idx = int(fit_row['T'])
         tmpl = templates[f'T{T_idx}']
+        if verbose: print(f'RRFit best template = {tmpl}')
 
         A_tmp = np.zeros(M_MAX); Q_tmp = np.zeros(M_MAX)
         A_RRFIT = np.array(tmpl.A, dtype=float)
@@ -178,8 +223,8 @@ def fourier_decomp(sid, mode='ogle', init='lsq',
         if verbose: print(f'RRFit period = {P0:.4f}d / E = {E0:.4f}')
     else:
         P0s, Zs = robust_period_search(t, mag, emag, bands, 
-                                    n0 = n0, K = K, harmonics = harmonics, 
-                                    snr = snr, plot = plot_LS)
+                                    n0 = params.n0, K = params.K, harmonics = params.harmonics, 
+                                    snr = params.snr, plot = plot_LS)
         Zmax = Zs.max()
         if verbose: print(f'Lomb-Scargle Period = {P0s} / Z = {Zs}')
     
@@ -193,7 +238,7 @@ def fourier_decomp(sid, mode='ogle', init='lsq',
     
     # _fit_wrapper: return = (theta0, chi2)
     chi2_opt_1 = np.inf
-    P0 = pmax # initialize (best period)
+    P0 = params.pmax # initialize (best period)
     for Pi, Zi in zip(P0s, Zs):
         #if Zi<0.2*Zmax: continue # non significant component
         # phase filling check
@@ -223,7 +268,7 @@ def fourier_decomp(sid, mode='ogle', init='lsq',
     if verbose: print(f'P0 = {P0:.4f} days')
 
     # --- truncation ---
-    _, _, A_vec_1, _, _, _ = unpack_theta(theta_opt_1, n_bands, M_fit=M_fit_1, include_amp=True)
+    _, _, A_vec_1, _, _, _ = theta_to_AQ(theta_opt_1, n_bands, M_fit=M_fit_1, include_amp=True)
 
     M_trunc = M_MAX
     # To Do: Dealing the M_MIN?
@@ -231,7 +276,7 @@ def fourier_decomp(sid, mode='ogle', init='lsq',
     # for 1O/2O? - better to use M_MIN<3?
     if A_vec_1[0] > 1e-5: # not close to 0
         dA = np.diff(A_vec_1)
-        significant = np.where(dA/A_vec_1[:-1]>THRESHOLD)[0]
+        significant = np.where(dA/A_vec_1[:-1]>params.THRESHOLD)[0]
         
         if len(significant) > 0:
             M_trunc = 1 + np.min(significant)
@@ -245,6 +290,14 @@ def fourier_decomp(sid, mode='ogle', init='lsq',
             
     M_fit_2 = M_trunc
 
+    M_fit_final, theta_opt_final, obj_opt_final, score_opt_final = select_order(
+        P0, args, activated_bands, phase_gaps, M_trunc,
+        period_fit=period_fit, use_optim=use_optim,
+        adaptive_lam=adaptive_lam, verbose=verbose)
+
+    m0, amp, A_fit, Q_fit, P, E = theta_to_AQ(theta_opt_final, n_bands, M_fit=M_fit_final,
+                                              include_amp=True, coef_mode=_coef_mode())
+    """
     # slicing 
     bounds_2 = _build_bounds(n_bands, M_fit_2)
     theta_opt_2, chi2_opt_2 = _fit_wrapper(P0, args, M_fit_2, bounds_2, activated_bands, phase_gaps = phase_gaps, 
@@ -274,12 +327,14 @@ def fourier_decomp(sid, mode='ogle', init='lsq',
         theta_opt_final = theta_opt_1
         chi2_opt_final = chi2_opt_1
         M_fit_final = M_fit_1
+
+    m0, amp, A_fit, Q_fit, P, E = unpack_theta(theta_opt_final, n_bands, M_fit=M_fit_final, include_amp=True)
+    """
     
     # =====================================
     # 3) summary statistics
     # =====================================
     # M_fit_final
-    m0, amp, A_fit, Q_fit, P, E = unpack_theta(theta_opt_final, n_bands, M_fit=M_fit_final, include_amp=True)
     
     # zero-padding (to fit M_MAX)
     A_out = np.zeros(M_MAX)
@@ -303,33 +358,37 @@ def fourier_decomp(sid, mode='ogle', init='lsq',
         t_ft, mag_ft, emag_ft = t[mask], mag[mask], emag[mask]
         N[i] = len(t_ft)
         
-        w_ft = 1 / np.maximum(emag_ft, ERR_FLOOR)**2
+        w_ft = 1 / np.maximum(emag_ft, params.ERR_FLOOR)**2
         # photometric error (w/o genuine pulsation)
         dm_ft = mag_ft-m0_data[ib]
         sig[i] = np.sqrt(np.average(dm_ft**2, weights=w_ft))
     
         theta_ft = [m0[i], amp[i], A_fit, Q_fit, P, E] 
-        fval = F(theta_ft, t_ft, M_fit_final)
+        fval = F(theta_ft, t_ft, M_fit_final, coef_mode='AQ')
 
         # residual 
         resid_ft = mag_ft - fval
         rms[i] = np.sqrt(np.average(resid_ft**2, weights=w_ft))
 
-        # parameter boundary excession check
-        if (amp[i] > Amax) or (amp[i] < Amin): flag = 1
+        # parameter boundary excession check (peak-to-peak amplitude only)
+        amp_ptp_ft = amp[i] * peak_to_peak_amplitude(A_fit, Q_fit, M_fit=M_fit_final, coef_mode='AQ')[0]
+        amp_lb, amp_ub = params.Amin, params.Amax
+        if (amp_ptp_ft > amp_ub) or (amp_ptp_ft < amp_lb): flag = 1
         m_lb, m_ub = min(mag_ft), max(mag_ft)
         if (m0[i] < m_lb) or (m0[i] > m_ub): flag = 1
 
         # Calculate rising time
+        """
         if filters[ib] == 'I':
             m_pk = np.percentile(mag_ft,[99,1])
             phase_pk = (t_ft[np.argmin(abs(mag_ft-m_pk[:,None]),axis=1)]/P0)%1 
             delta_phi = np.diff(phase_pk)[0]
             phi_rise = np.min([1-delta_phi, delta_phi])
-            
+        """
+
     if verbose:
-        print(f'ID = {sid} / Final M_fit = {M_fit_final} / CHI2 = {chi2_opt_final:.2f} / rrms = {rms[0]/sig[0]:.4f} / P = {P:.6f} days')
+        print(f'ID = {sid} / Final M_fit = {M_fit_final} / CHI2 = {obj_opt_final:.2f} / rrms = {rms[0]/sig[0]:.4f} / P = {P:.6f} days')
 
      #return m0, amp, A, Q, P, E, M_fit_final
-    row = [sid, pulsation, *N, *sig, *rms, *phase_gaps, Zmax, P0, chi2_opt_final, P, E, phi_rise, M_fit_final, *theta_params_out, flag]
+    row = [sid, pulsation, *N, *sig, *rms, *phase_gaps, Zmax, P0, obj_opt_final, P, E, phi_rise, M_fit_final, *theta_params_out, flag]
     return row

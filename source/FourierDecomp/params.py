@@ -19,33 +19,46 @@ DATA_CONFIGS = {
     },
 }
 
+# --- period search ---
+n0 = 2 # oversampling
+harmonics = 1 # maximum order of harmonics [P0, P0/n, n*P0]
+K = 5 # peak search for aliasing cleaning
+snr = 5 # relative peak strength for aliased frequency detection
+
 # --- fourier series ---
 M_MIN = 3   # minimum Fourier series order
-M_MAX = 10  # Max fourier order
-ERR_FLOOR = 0.01
+M_MAX = 15  # Max fourier order
+ERR_FLOOR = 0.001
 
 # --- adaptive fitting ---
-THRESHOLD = 0.1    # threshold   
+THRESHOLD = 0.1    # threshold
+ORDER_BIC_TOL = 2.0 # BIC tolerence 
 
 # --- fitting range ---
-Amin, Amax = 0.05, 2 # [mag]
+# Peak-to-peak amplitude range for each band [mag]
+Amin, Amax = 0.05, 2
+
+# Harmonic coefficient bounds A_j [shape coefficients]
+# Scalar -> same bound for every harmonic
+# Array   -> order-dependent bounds (A1, A2, ...)
+Amin_harmonic = 0.0
+Amax_harmonic = 2.0
+
 pmin, pmax = 0.2, 300 # [days]
-delta_P_tol = 0.0001 # [days] 
+delta_P_tol = 0.0001 # [days]
+
+coef_mode = 'ab' # ab (alpha, beta) or AQ (A, Q)
 
 opt_method = 'lasso'
 lam0 = 1e-2 # regularization coeff
 lam_min = 1e-4
 lam_max = 5e-2
 
-w_spike = 50.0 # spike penalty weight
+lam_spike = 1e-2 # spike penalty weight
+lam_h     = 1e-3 # harmonic penalty weight
 
-n0 = 2 # oversampling
-harmonics = 1 # maximum order of harmonics [P0, P0/n, n*P0]
-K = 5 # peak search for aliasing cleaning
-snr = 5 # relative peak strength for aliased frequency detection
-
-period_fit = False
-use_optim = True
+period_fit   = False
+use_optim    = True
 adaptive_lam = True
 
 init = 'rrfit' # lsq or rrfit

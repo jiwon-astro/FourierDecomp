@@ -1,12 +1,13 @@
 import numpy as np
 import matplotlib.pyplot as plt
-from .params import M_MAX
+from . import params
 from .IO import phot_names, epoch_arrays, get_data_config
 
 def compute_phase(t, P):
     return (t / P) % 1.0
 
-def phase_gap_score(t, P, M_fit=M_MAX): 
+def phase_gap_score(t, P, M_fit=None): 
+    if M_fit is None: M_fit = params.M_MAX
     if len(t) < (M_fit + 2): return True # M_fit 사용
     phi = compute_phase(t, P)
     phi_sorted = np.sort(phi)
