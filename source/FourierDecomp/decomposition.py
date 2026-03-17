@@ -338,24 +338,26 @@ def fourier_decomp(sid, mode='ogle', init='lasso',
         h_ft = H(theta_fit_tmpl, phi_ft, M_fit_final, coef_mode='AQ')
         m0_out[i] = m0[i]; amp_out[i] = amp[i] 
         if use_refit:
-            n_prev = len(h_ft)
+            good = np.ones(len(h_ft),dtype=bool)
             for _ in range(params.REFIT_MAXITER):
-                f_ft = m0_out[i] + amp_out[i] * h_ft
-                resid_ft = mag_ft - f_ft
-                # sigma clip
-                resmask = sigma_clip(resid_ft, sigma=params.REFIT_SIGMA, masked=True).mask
-                n_curr = (~resmask).sum()
-                if (n_curr < 2) or (n_prev==n_curr): break
-                elif n_curr < n_prev: n_prev = n_curr
-                
                 # refit (m0, amp)
-                X = np.column_stack([np.ones_like(h_ft[~resmask]), h_ft[~resmask]])
-                W = np.sqrt(w_ft[~resmask])
+                X = np.column_stack([np.ones_like(h_ft[good]), h_ft[good]])
+                W = np.sqrt(w_ft[good])
                 Xw = X * W[:, None]
-                yw = mag_ft[~resmask] * W
+                yw = mag_ft[good] * W
 
                 sol = np.linalg.lstsq(Xw, yw, rcond=None)[0]
                 m0_out[i], amp_out[i] = sol
+
+                # sigma clip
+                f_ft = m0_out[i] + amp_out[i] * h_ft
+                resid_ft = mag_ft - f_ft
+                resmask = sigma_clip(resid_ft, sigma=params.REFIT_SIGMA, masked=True).mask
+                n_curr = (~resmask).sum()
+
+                if np.array_equal(~resmask, good) or n_curr < 2: break
+                good = ~resmask
+                
             if verbose:
                 print(f"[Refinement / {filters[ib]}] rejected = {n_curr}/{len(h_ft)} | m0 = {m0[i]:.4f} -> {m0_out[i]:.4f} | amp = {amp[i]:.4f} -> {amp_out[i]:.4f}")
             
