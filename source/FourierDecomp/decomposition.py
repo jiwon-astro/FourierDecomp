@@ -299,6 +299,10 @@ def fourier_decomp(sid, mode='ogle', init='lasso',
 
     m0, amp, A_fit, Q_fit, P, E = theta_to_AQ(theta_opt_final, n_bands, M_fit=M_fit_final,
                                               include_amp=True, coef_mode=_coef_mode())
+    tmpl_amplitude = peak_to_peak_amplitude(A_fit, Q_fit, M_fit=M_fit_final, coef_mode='AQ')
+    A_fit /= tmpl_amplitude
+    amp *= tmpl_amplitude
+
     # =====================================
     # 3) summary statistics
     # =====================================
@@ -309,9 +313,6 @@ def fourier_decomp(sid, mode='ogle', init='lasso',
     Q_out = np.zeros(M_MAX)
     A_out[:M_fit_final] = A_fit
     Q_out[:M_fit_final] = Q_fit
-    tmpl_amplitude = peak_to_peak_amplitude(A_fit, Q_fit, M_fit=M_fit_final, coef_mode='AQ')
-    A_out /= tmpl_amplitude
-    amp *= tmpl_amplitude
     
     flag = 0
     N, sig, rms = np.zeros(n_bands, dtype='int'), np.zeros(n_bands), np.zeros(n_bands)
