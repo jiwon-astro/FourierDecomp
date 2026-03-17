@@ -390,6 +390,9 @@ def fourier_decomp(sid, mode='ogle', init='lasso',
 
                 sol = np.linalg.lstsq(Xw, yw, rcond=None)[0]
                 m0_out[i], amp_out[i] = sol
+            if verbose:
+                print(f"[Refinement / {filters[ib]}] m0 = {m0[i]:.4f} -> {m0_out[i]:.4f} | amp = {amp[i]:.4f} -> {amp_out[i]}")
+            
         else:
             f_ft = m0_out[i] + amp_out[i] * h_ft
             resid_ft = mag_ft - f_ft
