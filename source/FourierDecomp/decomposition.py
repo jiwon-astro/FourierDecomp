@@ -6,7 +6,7 @@ from astropy.stats import sigma_clip
 from . import params
 from .LC import phase_gap_score
 from .IO import epoch_arrays, get_data_config 
-from .LSQ import F, LSQ_fit, chisq, unpack_theta, peak_to_peak_amplitude, _coef_mode, _harmonic_bounds, theta_to_AQ
+from .LSQ import F, LSQ_fit, refit_m0_amp, chisq, unpack_theta, peak_to_peak_amplitude, _coef_mode, _harmonic_bounds, theta_to_AQ
 from .period_finder import robust_period_search
 
 import warnings
@@ -163,7 +163,7 @@ def select_order(P0, args, activated_bands, phase_gaps, M_trunc,
 
 # === Main Function ===
 def fourier_decomp(sid, mode='ogle', init='lasso',
-                   period_fit=False, use_optim=False, adaptive_lam=False,
+                   period_fit=False, use_optim=False, adaptive_lam=False, use_refit=False,
                    verbose=False, plot_LS=False, K=None, harmonics=None):
     # Load data
     if mode is None: mode = get_data_config().mode
@@ -293,12 +293,15 @@ def fourier_decomp(sid, mode='ogle', init='lasso',
     M_fit_2 = M_trunc
 
     M_fit_final, theta_opt_final, chi2_opt_final, obj_opt_final, score_final = select_order(
-        P0, args, activated_bands, phase_gaps, M_trunc,
+        P0, args, activated_bands, phase_gaps, M_fit_2,
         period_fit=period_fit, use_optim=use_optim,
         adaptive_lam=adaptive_lam, verbose=verbose)
 
     m0, amp, A_fit, Q_fit, P, E = theta_to_AQ(theta_opt_final, n_bands, M_fit=M_fit_final,
                                               include_amp=True, coef_mode=_coef_mode())
+    if use_refit:
+        m0, amp = refit_m0_amp(args, A_fit, Q_fit, P, E) # refit amplitude with LSQ (all bands)
+
     """
     # slicing 
     bounds_2 = _build_bounds(n_bands, M_fit_2)

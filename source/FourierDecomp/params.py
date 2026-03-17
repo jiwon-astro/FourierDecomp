@@ -57,10 +57,11 @@ lam_min = 1e-4
 lam_max = 5e-2
 
 lam_spike = 1e-1 # spike penalty weight
-lam_h     = 20 # harmonic penalty weight
+lam_h     = 10 # harmonic penalty weight
 
 period_fit   = False
 use_optim    = True
 adaptive_lam = True
+use_refit    = True
 
 init = 'rrfit' # lsq or rrfit

@@ -4,7 +4,7 @@ from tqdm.notebook import tqdm
 import csv
 import time
 
-from .params import period_fit, use_optim, adaptive_lam, mode_default, init
+from .params import period_fit, use_optim, adaptive_lam, use_refit, mode_default, init
 from .IO import get_data_config, build_fd_header
 
 def _init_worker(ls_data, df_ident, df_rrfit, templates):
@@ -18,7 +18,7 @@ def _init_worker(ls_data, df_ident, df_rrfit, templates):
 
 def _worker_call(args):
     """Picklable wrapper for imap."""
-    sid, mode, init, period_fit, use_optim, adaptive_lam, verbose = args
+    sid, mode, init, period_fit, use_optim, adaptive_lam, use_refit, verbose = args
     from . import decomposition as decomp_mod
     try:
         row = decomp_mod.fourier_decomp(
@@ -28,6 +28,7 @@ def _worker_call(args):
             period_fit=period_fit,
             use_optim=use_optim,
             adaptive_lam=adaptive_lam,
+            use_refit=use_refit,
             verbose=verbose,
         )
         return (sid, row, None)
@@ -40,6 +41,7 @@ def mp_run(
     period_fit=period_fit,
     use_optim=use_optim,
     adaptive_lam=adaptive_lam,
+    use_refit=use_refit,
     mode=mode_default,
     init=init,
     max_workers=8,
@@ -87,7 +89,7 @@ def mp_run(
         try:
             it = pool.imap_unordered(
                 _worker_call,
-                ((sid, mode, init, period_fit, use_optim, adaptive_lam, verbose) for sid in ids),
+                ((sid, mode, init, period_fit, use_optim, adaptive_lam, use_refit, verbose) for sid in ids),
                 chunksize=chunksize,
             )
 
@@ -112,7 +114,7 @@ def mp_run(
     print(f"Done. total={n_total}, ok={n_ok}, fail={n_fail}, elapsed={dt:.1f}s, rate={rate:.2f} obj/s")
 
 def thread_run(fd_output, ids, period_fit = period_fit,
-               use_optim = use_optim, adaptive_lam = adaptive_lam,
+               use_optim = use_optim, adaptive_lam = adaptive_lam, use_refit = use_refit,
                mode = mode_default, init = init, max_workers = 8):
     """
     Run decomposition.fourier_decomp(sid, ...) over many IDs with threads.
@@ -152,7 +154,7 @@ def thread_run(fd_output, ids, period_fit = period_fit,
         for sid in ids:
             pool.apply_async(decomp_mod.fourier_decomp, 
                              args =(sid, mode, init, period_fit, 
-                                    use_optim, adaptive_lam, False),
+                                    use_optim, adaptive_lam, use_refit, False),
                             callback = callback)
         pool.close()
         pool.join() # close / return pool to os
