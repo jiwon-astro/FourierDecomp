@@ -355,11 +355,11 @@ def fourier_decomp(sid, mode='ogle', init='lasso',
                 resmask = sigma_clip(resid_ft, sigma=params.REFIT_SIGMA, masked=True).mask
                 n_curr = (~resmask).sum()
 
-                if np.array_equal(~resmask, good) or n_curr < 2: break
+                if np.array_equal(~resmask, good) or n_curr < 5: break
                 good = ~resmask
-                
+
             if verbose:
-                print(f"[Refinement / {filters[ib]}] rejected = {n_curr}/{len(h_ft)} | m0 = {m0[i]:.4f} -> {m0_out[i]:.4f} | amp = {amp[i]:.4f} -> {amp_out[i]:.4f}")
+                print(f"[Refinement / {filters[ib]}] used = {n_curr}/{len(h_ft)} | m0 = {m0[i]:.4f} -> {m0_out[i]:.4f} | amp = {amp[i]:.4f} -> {amp_out[i]:.4f}")
             
         else:
             f_ft = m0_out[i] + amp_out[i] * h_ft
