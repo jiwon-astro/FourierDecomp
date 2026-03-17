@@ -299,40 +299,6 @@ def fourier_decomp(sid, mode='ogle', init='lasso',
 
     m0, amp, A_fit, Q_fit, P, E = theta_to_AQ(theta_opt_final, n_bands, M_fit=M_fit_final,
                                               include_amp=True, coef_mode=_coef_mode())
-    """
-    # slicing 
-    bounds_2 = _build_bounds(n_bands, M_fit_2)
-    theta_opt_2, chi2_opt_2 = _fit_wrapper(P0, args, M_fit_2, bounds_2, activated_bands, phase_gaps = phase_gaps, 
-                                           period_fit= period_fit, use_optim=use_optim, adaptive_lam=adaptive_lam, verbose=verbose)
-                                           #theta0=(theta0_rrfit if init=='rrfit' else None))
-
-    # 2nd fitting is better than 1st fitting
-    if verbose:
-        print(f'chi1 = {chi2_opt_1:.4e} / chi2 = {chi2_opt_2:.4e}')
-    
-    bic_1 = bic(chi2_opt_1, len(t), len(theta_opt_1))
-    bic_2 = bic(chi2_opt_2, len(t),len(theta_opt_2))
-
-    _, fval_grid_1 = eval_on_grid(theta_opt_1, n_bands, M_fit_1)
-    _, fval_grid_2 = eval_on_grid(theta_opt_2, n_bands, M_fit_2)
-    spike_1 = spike_penalty(fval_grid_1)
-    spike_2 = spike_penalty(fval_grid_2)
-    bic_1 += w_spike * spike_1
-    bic_2 += w_spike * spike_2
-
-    if np.isfinite(chi2_opt_2) and bic_2 <= bic_1:
-        theta_opt_final = theta_opt_2
-        chi2_opt_final = chi2_opt_2
-        M_fit_final = M_fit_2
-    else:
-        # 2nd fitting failed or worsen
-        theta_opt_final = theta_opt_1
-        chi2_opt_final = chi2_opt_1
-        M_fit_final = M_fit_1
-
-    m0, amp, A_fit, Q_fit, P, E = unpack_theta(theta_opt_final, n_bands, M_fit=M_fit_final, include_amp=True)
-    """
-    
     # =====================================
     # 3) summary statistics
     # =====================================
@@ -391,7 +357,7 @@ def fourier_decomp(sid, mode='ogle', init='lasso',
                 sol = np.linalg.lstsq(Xw, yw, rcond=None)[0]
                 m0_out[i], amp_out[i] = sol
             if verbose:
-                print(f"[Refinement / {filters[ib]}] m0 = {m0[i]:.4f} -> {m0_out[i]:.4f} | amp = {amp[i]:.4f} -> {amp_out[i]}")
+                print(f"[Refinement / {filters[ib]}] rejected = {n_curr}/{len(h_ft)} | m0 = {m0[i]:.4f} -> {m0_out[i]:.4f} | amp = {amp[i]:.4f} -> {amp_out[i]:.4f}")
             
         else:
             f_ft = m0_out[i] + amp_out[i] * h_ft
@@ -423,3 +389,37 @@ def fourier_decomp(sid, mode='ogle', init='lasso',
     row = [sid, pulsation, *N, *sig, *rms, *phase_gaps, Zmax, P0, chi2_opt_final, obj_opt_final, 
            P, E, phi_rise, M_fit_final, *theta_params_out, flag]
     return row
+
+"""
+    # slicing 
+    bounds_2 = _build_bounds(n_bands, M_fit_2)
+    theta_opt_2, chi2_opt_2 = _fit_wrapper(P0, args, M_fit_2, bounds_2, activated_bands, phase_gaps = phase_gaps, 
+                                           period_fit= period_fit, use_optim=use_optim, adaptive_lam=adaptive_lam, verbose=verbose)
+                                           #theta0=(theta0_rrfit if init=='rrfit' else None))
+
+    # 2nd fitting is better than 1st fitting
+    if verbose:
+        print(f'chi1 = {chi2_opt_1:.4e} / chi2 = {chi2_opt_2:.4e}')
+    
+    bic_1 = bic(chi2_opt_1, len(t), len(theta_opt_1))
+    bic_2 = bic(chi2_opt_2, len(t),len(theta_opt_2))
+
+    _, fval_grid_1 = eval_on_grid(theta_opt_1, n_bands, M_fit_1)
+    _, fval_grid_2 = eval_on_grid(theta_opt_2, n_bands, M_fit_2)
+    spike_1 = spike_penalty(fval_grid_1)
+    spike_2 = spike_penalty(fval_grid_2)
+    bic_1 += w_spike * spike_1
+    bic_2 += w_spike * spike_2
+
+    if np.isfinite(chi2_opt_2) and bic_2 <= bic_1:
+        theta_opt_final = theta_opt_2
+        chi2_opt_final = chi2_opt_2
+        M_fit_final = M_fit_2
+    else:
+        # 2nd fitting failed or worsen
+        theta_opt_final = theta_opt_1
+        chi2_opt_final = chi2_opt_1
+        M_fit_final = M_fit_1
+
+    m0, amp, A_fit, Q_fit, P, E = unpack_theta(theta_opt_final, n_bands, M_fit=M_fit_final, include_amp=True)
+    """

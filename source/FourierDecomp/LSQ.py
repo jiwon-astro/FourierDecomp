@@ -219,39 +219,6 @@ def chisq(theta, t, mag, emag, bmask, M_fit, n_dim, activated_bands, coef_mode=N
     return summ / dof # Reduced chi-square
 
 # === LSQ fits ===
-def refit_m0_amp(args, A_fit, Q_fit, P, E, sigma=3.0, maxiter=5):
-    t, mag, emag, bmask = args
-    M_fit = len(A_fit)
-    n_bands = len(bmask) # all bands
-    m0_refit = np.zeros(n_bands)
-    amp_refit = np.zeros(n_bands)
-    # shared shape with unit amplitude
-    for i, mask in enumerate(bmask):
-        if not np.any(mask):
-            m0_refit[i] = np.nan
-            amp_refit[i] = np.nan
-            continue
-
-        t_ft, mag_ft, emag_ft = t[mask], mag[mask], emag[mask]
-        w_ft = 1.0 / np.maximum(emag_ft, params.ERR_FLOOR)**2
-
-        # h(t): shared template with m0=0, amp=1
-        theta_ft = (A_fit, Q_fit)
-        phi_ft = ((t_ft - E)/P)%1
-        h_ft = H(theta_ft, phi_ft, M_fit, coef_mode='AQ')
-
-        X = np.column_stack([np.ones_like(h_ft), h_ft])
-        W = np.sqrt(w_ft)
-        Xw = X * W[:, None]
-        yw = mag_ft * W
-
-        sol = np.linalg.lstsq(Xw, yw, rcond=None)[0]
-        m0_ft, amp_ft = sol
-
-
-
-    return m0_refit, amp_refit
-
 def LSQ_fit(P0, args, M_fit, activated_bands, opt_method='lsq', quality_weight=False,
              bounds=None, phase_flag=None, Nmin=50, lam=1e-3, coef_mode=None): # M_fit
     # phase_flag: having a large phase gap in the phase-folded light curve
