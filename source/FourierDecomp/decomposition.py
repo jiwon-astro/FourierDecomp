@@ -372,7 +372,7 @@ def fourier_decomp(sid, mode='ogle', init='lasso',
         h_ft = H(theta_fit_tmpl, phi_ft, M_fit_final, coef_mode='AQ')
         m0_out[i] = m0[i]; amp_out[i] = amp[i] 
         if use_refit:
-            n_prev = len(resid_ft)
+            n_prev = len(h_ft)
             for _ in range(params.REFIT_MAXITER):
                 f_ft = m0_out[i] + amp_out[i] * h_ft
                 resid_ft = mag_ft - f_ft
