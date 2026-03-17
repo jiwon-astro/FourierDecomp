@@ -1,5 +1,6 @@
 import numpy as np
 
+from astropy.stats import sigma_clip
 from scipy.signal import find_peaks
 from scipy.optimize import minimize
 from scipy.linalg import lstsq, norm
@@ -115,7 +116,7 @@ def reg_lsq_lasso(X, y, w, lam, beta_init, return_sol = False):
         return m0, A_vec, Q_vec
 
 # === Vectorized Fourier Series === 
-def H(theta, t, M_fit = None, coef_mode=None):
+def H(theta, phi, M_fit = None, coef_mode=None):
     # unit template function
     coef_mode = _coef_mode(coef_mode)
     if M_fit is None: M_fit = params.M_MAX
@@ -123,8 +124,7 @@ def H(theta, t, M_fit = None, coef_mode=None):
     if len(theta) != 2:
         raise ValueError(f"F(): theta length={len(theta)} (expected 2)")
     c1, c2 = theta
-    P = 1.0  # unit period
-    phi = t / P % 1.0  # to make numerically stable
+    phi %= 1.0  # to make numerically stable
     orders = 1 + np.arange(M_fit).reshape(-1, 1) # Fourier series order
     phase = 2 * np.pi * phi * orders
     C, S = np.cos(phase), np.sin(phase)
@@ -219,7 +219,7 @@ def chisq(theta, t, mag, emag, bmask, M_fit, n_dim, activated_bands, coef_mode=N
     return summ / dof # Reduced chi-square
 
 # === LSQ fits ===
-def refit_m0_amp(args, A_fit, Q_fit, P, E):
+def refit_m0_amp(args, A_fit, Q_fit, P, E, sigma=3.0, maxiter=5):
     t, mag, emag, bmask = args
     M_fit = len(A_fit)
     n_bands = len(bmask) # all bands
@@ -246,8 +246,9 @@ def refit_m0_amp(args, A_fit, Q_fit, P, E):
         yw = mag_ft * W
 
         sol = np.linalg.lstsq(Xw, yw, rcond=None)[0]
-        m0_refit[i] = sol[0]
-        amp_refit[i] = sol[1]
+        m0_ft, amp_ft = sol
+
+
 
     return m0_refit, amp_refit
 

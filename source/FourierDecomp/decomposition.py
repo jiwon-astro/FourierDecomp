@@ -6,7 +6,7 @@ from astropy.stats import sigma_clip
 from . import params
 from .LC import phase_gap_score
 from .IO import epoch_arrays, get_data_config 
-from .LSQ import F, LSQ_fit, refit_m0_amp, chisq, unpack_theta, peak_to_peak_amplitude, _coef_mode, _harmonic_bounds, theta_to_AQ
+from .LSQ import F, H, LSQ_fit, chisq, unpack_theta, peak_to_peak_amplitude, _coef_mode, _harmonic_bounds, theta_to_AQ
 from .period_finder import robust_period_search
 
 import warnings
@@ -299,9 +299,6 @@ def fourier_decomp(sid, mode='ogle', init='lasso',
 
     m0, amp, A_fit, Q_fit, P, E = theta_to_AQ(theta_opt_final, n_bands, M_fit=M_fit_final,
                                               include_amp=True, coef_mode=_coef_mode())
-    if use_refit:
-        m0, amp = refit_m0_amp(args, A_fit, Q_fit, P, E) # refit amplitude with LSQ (all bands)
-
     """
     # slicing 
     bounds_2 = _build_bounds(n_bands, M_fit_2)
@@ -349,13 +346,13 @@ def fourier_decomp(sid, mode='ogle', init='lasso',
     tmpl_amplitude = peak_to_peak_amplitude(A_fit, Q_fit, M_fit=M_fit_final, coef_mode='AQ')
     A_out /= tmpl_amplitude
     amp *= tmpl_amplitude
-
-    theta_params_out = np.hstack([m0, amp, A_out, Q_out])
     
     flag = 0
     N, sig, rms = np.zeros(n_bands, dtype='int'), np.zeros(n_bands), np.zeros(n_bands)
     phi_rise = np.nan
     
+    m0_out, amp_out = np.zeros(n_bands), np.zeros(n_bands)
+    theta_fit_tmpl = (A_fit, Q_fit) 
     for i, ib in enumerate(activated_bands):
         mask = bmask[ib]
         if not np.any(mask):
@@ -371,19 +368,40 @@ def fourier_decomp(sid, mode='ogle', init='lasso',
         dm_ft = mag_ft-m0_data[ib]
         sig[i] = np.sqrt(np.average(dm_ft**2, weights=w_ft))
     
-        theta_ft = [m0[i], amp[i], A_fit, Q_fit, P, E] 
-        fval = F(theta_ft, t_ft, M_fit_final, coef_mode='AQ')
+        phi_ft = ((t_ft - E)/P)%1
+        h_ft = H(theta_fit_tmpl, phi_ft, M_fit_final, coef_mode='AQ')
+        m0_out[i] = m0[i]; amp_out[i] = amp[i] 
+        if use_refit:
+            n_prev = len(resid_ft)
+            for _ in range(params.REFIT_MAXITER):
+                f_ft = m0_out[i] + amp_out[i] * h_ft
+                resid_ft = mag_ft - f_ft
+                # sigma clip
+                resmask = sigma_clip(resid_ft, sigma=params.REFIT_SIGMA, masked=True).mask
+                n_curr = (~resmask).sum()
+                if (n_curr < 2) or (n_prev==n_curr): break
+                elif n_curr < n_prev: n_prev = n_curr
+                
+                # refit (m0, amp)
+                X = np.column_stack([np.ones_like(h_ft[~resmask]), h_ft[~resmask]])
+                W = np.sqrt(w_ft[~resmask])
+                Xw = X * W[:, None]
+                yw = mag_ft[~resmask] * W
+
+                sol = np.linalg.lstsq(Xw, yw, rcond=None)[0]
+                m0_out[i], amp_out[i] = sol
+        else:
+            f_ft = m0_out[i] + amp_out[i] * h_ft
+            resid_ft = mag_ft - f_ft
 
         # residual 
-        resid_ft = mag_ft - fval
         rms[i] = np.sqrt(np.average(resid_ft**2, weights=w_ft))
 
         # parameter boundary excession check (peak-to-peak amplitude only)
-        amp_ptp_ft = amp[i]
         amp_lb, amp_ub = params.Amin, params.Amax
-        if (amp_ptp_ft > amp_ub) or (amp_ptp_ft < amp_lb): flag = 1
+        if (amp_out[i] > amp_ub) or (amp_out[i] < amp_lb): flag = 1
         m_lb, m_ub = min(mag_ft), max(mag_ft)
-        if (m0[i] < m_lb) or (m0[i] > m_ub): flag = 1
+        if (m0_out[i] < m_lb) or (m0_out[i] > m_ub): flag = 1
 
         # Calculate rising time
         """
@@ -397,6 +415,7 @@ def fourier_decomp(sid, mode='ogle', init='lasso',
     if verbose:
         print(f'ID = {sid} / Final M_fit = {M_fit_final} / CHI2 = {chi2_opt_final:.2f} / F_obj = {obj_opt_final:.2f} / rrms = {rms[0]/sig[0]:.4f} / P = {P:.6f} days')
 
+    theta_params_out = np.hstack([m0_out, amp_out, A_out, Q_out])
      #return m0, amp, A, Q, P, E, M_fit_final
     row = [sid, pulsation, *N, *sig, *rms, *phase_gaps, Zmax, P0, chi2_opt_final, obj_opt_final, 
            P, E, phi_rise, M_fit_final, *theta_params_out, flag]
