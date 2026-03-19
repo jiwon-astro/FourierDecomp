@@ -252,9 +252,9 @@ def chisq_single_m0_amp(theta, h_ft, mag_ft, w_ft):
         # fitting objective function
         m0, amp = theta
         f_ft = m0 + amp * h_ft
-        resid = (mag_ft - h_ft)
+        resid = (mag_ft - f_ft)
         dof = len(h_ft) - len(theta)
-        return np.sum(resid**2 * w_ft) / dof
+        return np.sum(resid**2 * w_ft) / dof # reduced chi2
 
 # === main function ===
 def refit_m0_amp(h_ft, mag_ft, w_ft, opt_method='lsq', m0_init=None, amp_init=None, 
