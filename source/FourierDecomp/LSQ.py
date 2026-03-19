@@ -114,6 +114,36 @@ def reg_lsq_lasso(X, y, w, lam, beta_init, return_sol = False):
         coeffs = sol[1:]
         A_vec, Q_vec = ab_to_AQ(coeffs[0::2], coeffs[1::2])
         return m0, A_vec, Q_vec
+    
+# === amplitude refitting ===
+def refit_m0_amp_LSQ(h_ft, mag_ft, w_ft, good=None):
+    if good is None: good = np.ones(len(h_ft),dtype=bool)
+    X = np.column_stack([np.ones_like(h_ft[good]), h_ft[good]])
+    W = np.sqrt(w_ft[good])
+    Xw = X * W[:, None]
+    yw = mag_ft[good] * W
+    sol = np.linalg.lstsq(Xw, yw, rcond=None)[0]
+    # evaluate chisq 
+    chi2 = chisq_single_m0_amp(sol, h_ft[good], mag_ft[good], w_ft[good])   
+    return sol[0], sol[1], chi2
+
+def refit_m0_amp_optim(h_ft, mag_ft, w_ft, m0_init=None, amp_init=None, 
+                       good=None, amp_bounds=None):
+    if (m0_init is None) or (amp_init is None):
+        raise ValueError("optimization method requires initial guess of (m0, amp)")
+    if good is None: good = np.ones(len(h_ft),dtype=bool)
+    if amp_bounds is None:
+        amp_bounds = (params.Amin, params.Amax)
+    
+    res = minimize(
+        chisq_single_m0_amp, x0=np.array([m0_init, amp_init]),
+        args=(h_ft[good], mag_ft[good], w_ft[good]),
+        method="L-BFGS-B", bounds=[(-np.inf, np.inf), amp_bounds]
+    )
+    if res.success:
+        return res.x[0], res.x[1], res.fun
+    return m0_init, amp_init, np.inf
+
 
 # === Vectorized Fourier Series === 
 def H(theta, phi, M_fit = None, coef_mode=None):
@@ -218,7 +248,26 @@ def chisq(theta, t, mag, emag, bmask, M_fit, n_dim, activated_bands, coef_mode=N
     if dof <= 0: return np.inf #insufficient data point
     return summ / dof # Reduced chi-square
 
-# === LSQ fits ===
+def chisq_single_m0_amp(theta, h_ft, mag_ft, w_ft):
+        # fitting objective function
+        m0, amp = theta
+        f_ft = m0 + amp * h_ft
+        resid = (mag_ft - h_ft)
+        return np.sum(resid**2 * w_ft)
+
+# === main function ===
+def refit_m0_amp(h_ft, mag_ft, w_ft, opt_method='lsq', m0_init=None, amp_init=None, 
+                       good=None, amp_bounds=None):
+    # chi2: only calculated with good values
+    m0, amp, chi2 = None, None, None
+    if opt_method == 'lsq':
+        m0, amp, chi2 = refit_m0_amp_LSQ(h_ft, mag_ft, w_ft, good=good)
+    elif opt_method == 'optim':
+        m0, amp, chi2 = refit_m0_amp_optim(h_ft, mag_ft, w_ft, m0_init=m0_init, amp_init=amp_init,
+                                           good=good, amp_bounds=amp_bounds)
+    else: raise ValueError("opt_method should be lsq or optim")
+    return m0, amp, chi2
+
 def LSQ_fit(P0, args, M_fit, activated_bands, opt_method='lsq', quality_weight=False,
              bounds=None, phase_flag=None, Nmin=50, lam=1e-3, coef_mode=None): # M_fit
     # phase_flag: having a large phase gap in the phase-folded light curve

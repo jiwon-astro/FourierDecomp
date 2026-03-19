@@ -6,7 +6,7 @@ from astropy.stats import sigma_clip
 from . import params
 from .LC import phase_gap_score
 from .IO import epoch_arrays, get_data_config 
-from .LSQ import F, H, LSQ_fit, chisq, unpack_theta, peak_to_peak_amplitude, _coef_mode, _harmonic_bounds, theta_to_AQ
+from .LSQ import F, H, LSQ_fit, refit_m0_amp, chisq, unpack_theta, peak_to_peak_amplitude, _coef_mode, _harmonic_bounds, theta_to_AQ
 from .period_finder import robust_period_search
 
 import warnings
@@ -306,8 +306,6 @@ def fourier_decomp(sid, mode='ogle', init='lasso',
     # =====================================
     # 3) summary statistics
     # =====================================
-    # M_fit_final
-    
     # zero-padding (to fit M_MAX)
     A_out = np.zeros(M_MAX)
     Q_out = np.zeros(M_MAX)
@@ -334,7 +332,8 @@ def fourier_decomp(sid, mode='ogle', init='lasso',
         # photometric error (w/o genuine pulsation)
         dm_ft = mag_ft-m0_data[ib]
         sig[i] = np.sqrt(np.average(dm_ft**2, weights=w_ft))
-    
+
+        # amplitude refitting`
         phi_ft = ((t_ft - E)/P)%1
         h_ft = H(theta_fit_tmpl, phi_ft, M_fit_final, coef_mode='AQ')
         m0_out[i] = m0[i]; amp_out[i] = amp[i] 
@@ -342,14 +341,15 @@ def fourier_decomp(sid, mode='ogle', init='lasso',
             good = np.ones(len(h_ft),dtype=bool)
             for _ in range(params.REFIT_MAXITER):
                 # refit (m0, amp)
-                X = np.column_stack([np.ones_like(h_ft[good]), h_ft[good]])
-                W = np.sqrt(w_ft[good])
-                Xw = X * W[:, None]
-                yw = mag_ft[good] * W
-
-                sol = np.linalg.lstsq(Xw, yw, rcond=None)[0]
-                m0_out[i], amp_out[i] = sol
-
+                # these chi2_ampl values are evaluated only with "good" values.
+                m0_out[i], amp_out[i], chi2_ampl = refit_m0_amp(h_ft, mag_ft, w_ft, opt_method='lsq',
+                                                               good=good)
+                amp_ratio = amp_out[i] / amp_data[ib]
+                if (0.7 > amp_ratio) or (1.3 < amp_ratio):
+                    amp_lb, amp_ub = params.Amin, params.Amax # default (naive amplitude boundary)
+                    m0_out[i], amp_out[i], chi2_ampl = refit_m0_amp(h_ft, mag_ft, w_ft, opt_method='optim',
+                                                                    m0_init=m0_data[i], amp_init=amp_data[i], good=good,
+                                                                    amp_bounds = (amp_lb, amp_ub))
                 # sigma clip
                 f_ft = m0_out[i] + amp_out[i] * h_ft
                 resid_ft = mag_ft - f_ft
@@ -360,7 +360,7 @@ def fourier_decomp(sid, mode='ogle', init='lasso',
                 good = ~resmask
 
             if verbose:
-                print(f"[Refinement / {filters[ib]}] used = {n_curr}/{len(h_ft)} | m0 = {m0[i]:.4f} -> {m0_out[i]:.4f} | amp = {amp[i]:.4f} -> {amp_out[i]:.4f}")
+                print(f"[Refinement / {filters[ib]}] used = {n_curr}/{len(h_ft)} | m0 = {m0[i]:.4f} -> {m0_out[i]:.4f} | amp = {amp[i]:.4f} -> {amp_out[i]:.4f} (ratio(data) = {amp_ratio:.2f}) | CHI2 = {chi2_ampl:.2f}")
             
         else:
             f_ft = m0_out[i] + amp_out[i] * h_ft
@@ -372,6 +372,7 @@ def fourier_decomp(sid, mode='ogle', init='lasso',
         # parameter boundary excession check (peak-to-peak amplitude only)
         amp_lb, amp_ub = params.Amin, params.Amax
         if (amp_out[i] > amp_ub) or (amp_out[i] < amp_lb): flag = 1
+
         m_lb, m_ub = min(mag_ft), max(mag_ft)
         if (m0_out[i] < m_lb) or (m0_out[i] > m_ub): flag = 1
 
@@ -383,7 +384,7 @@ def fourier_decomp(sid, mode='ogle', init='lasso',
             delta_phi = np.diff(phase_pk)[0]
             phi_rise = np.min([1-delta_phi, delta_phi])
         """
-
+    # ToDo:  after amplitude refinement, chi2 value should be reevaluated!!
     if verbose:
         print(f'ID = {sid} / Final M_fit = {M_fit_final} / CHI2 = {chi2_opt_final:.2f} / F_obj = {obj_opt_final:.2f} / rrms = {rms[0]/sig[0]:.4f} / P = {P:.6f} days')
 
