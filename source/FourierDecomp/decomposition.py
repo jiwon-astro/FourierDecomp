@@ -339,9 +339,9 @@ def fourier_decomp(sid, mode='ogle', init='lasso',
         h_ft = H(theta_fit_tmpl, phi_ft, M_fit_final, coef_mode='AQ')
         if i in activated_bands: 
             ib = np.where(activated_bands == i)[0][0]
-            m0_out[i] = m0[ib]; amp_out[i] = amp[ib]
-        else: m0_out[i] = m0_data[i]; amp_out[i] = amp_data[i] # not used for Fourier coefficient calculations
-
+            m0_init = m0[ib]; amp_init = amp[ib]
+        else: m0_init = m0_data[i]; amp_init = amp_data[i] # not used for Fourier coefficient calculations
+        m0_out[i] = m0_init; amp_out[i] = amp_init
         if use_refit and (len(h_ft)>5):
             good = np.ones(len(h_ft),dtype=bool)
             for _ in range(params.REFIT_MAXITER):
@@ -365,8 +365,7 @@ def fourier_decomp(sid, mode='ogle', init='lasso',
                 good = ~resmask
 
             if verbose:
-            
-                print(f"[Refinement / {flt}] used = {n_curr}/{len(h_ft)} | m0 = {m0_out[i]:.4f} | amp = {amp_out[i]:.4f} (ratio(data) = {amp_ratio:.2f}) | CHI2 = {chi2_ampl:.2f}")
+                print(f"[Refinement / {flt}] used = {n_curr}/{len(h_ft)} | m0 = {m0_init:.4f} -> {m0_out[i]:.4f} | amp = {amp_init} -> {amp_out[i]:.4f} (ratio(data) = {amp_ratio:.2f}) | CHI2 = {chi2_ampl:.2f}")
             
         else:
             f_ft = m0_out[i] + amp_out[i] * h_ft
