@@ -188,7 +188,7 @@ def _chunk_loader_threading(source_ids, phot_dir, mode, desc = None,
                             max_workers=12, chunk_size=200):
     nmax = len(source_ids)
     dl = {}
-    with ThreadPoolExecutor(max_workersf=max_workers) as executor:
+    with ThreadPoolExecutor(max_workers=max_workers) as executor:
         futures = []
         for i in range(0, nmax, chunk_size):
             batch_ids = source_ids[i:min(i + chunk_size, nmax)]
