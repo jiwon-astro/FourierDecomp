@@ -365,7 +365,7 @@ def fourier_decomp(sid, mode='ogle', init='lasso',
                 good = ~resmask
 
             if verbose:
-                print(f"[Refinement / {flt}] used = {n_curr}/{len(h_ft)} | m0 = {m0_init:.4f} -> {m0_out[i]:.4f} | amp = {amp_init} -> {amp_out[i]:.4f} (ratio(data) = {amp_ratio:.2f}) | CHI2 = {chi2_ampl:.2f}")
+                print(f"[Refinement / {flt}] used = {n_curr}/{len(h_ft)} | m0 = {m0_init:.4f} -> {m0_out[i]:.4f} | amp = {amp_init:.4f} -> {amp_out[i]:.4f} (ratio(data) = {amp_ratio:.2f}) | CHI2 = {chi2_ampl:.2f}")
             
         else:
             f_ft = m0_out[i] + amp_out[i] * h_ft
