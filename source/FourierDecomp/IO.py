@@ -18,6 +18,7 @@ class DataConfig:
     filters: np.ndarray          # e.g. ['V','I'] or ['g','bp','rp']
     prefixs: np.ndarray          # e.g. [0,1] or [0,1,2]
     activated_bands: list        # indices in prefixs
+    n_bands_full: int
     n_bands: int
     lc_colors: list
     lc_markers: list
@@ -42,6 +43,7 @@ def get_data_config(mode: Optional[str] = None) -> DataConfig:
     flt = np.array(base['filters'], dtype=object)
     pfx = np.array(base['prefixs'], dtype=int)
     act = np.array(base['activated_bands'], dtype=int)
+    n_b_full = len(flt)
     n_b = len(act)
 
     colors = list(base['lc_colors'])
@@ -52,6 +54,7 @@ def get_data_config(mode: Optional[str] = None) -> DataConfig:
         filters=flt,
         prefixs=pfx,
         activated_bands=act,
+        n_bands_full=n_b_full,
         n_bands=n_b,
         lc_colors=colors,
         lc_markers=markers,
@@ -60,40 +63,40 @@ def get_data_config(mode: Optional[str] = None) -> DataConfig:
 # ===================================================
 # output header
 # ===================================================
-# --- dynamic header based on activated bands ---
 def build_fd_header(mode = None):
     """
-    Build output header for Fourier decomposition using only activated bands.
+    Build output header for Fourier decomposition.
     Output row format must match decomposition.fourier_decomp().
 
     Expected row layout (as in decomposition.fourier_decomp):
       [sid, pulsation, *N, *sig, *rms, Zmax, P0, chi2, P, E, phi_rise, M_fit, *theta_params_out, flag]
     where:
-      N/sig/rms are per activated band
+      N/sig/rms are
       theta_params_out = [*m0, *amp, *A(1..M_MAX), *Q(1..M_MAX)]
         but only for activated bands in m0/amp
     """
     from .params import M_MAX
 
     cfg = get_data_config(mode)
-    active_idx = list(cfg.activated_bands)
-    active_filters = [str(cfg.filters[i]) for i in active_idx]
+    filters = cfg.filters
+    #active_idx = list(cfg.activated_bands)
+    #active_filters = [str(cfg.filters[i]) for i in active_idx]
 
     cols = []
     cols += ["ID", "pulsation"]
 
-    # Per-band stats (only activated bands)
-    cols += [f"N_{b}" for b in active_filters]
-    cols += [f"sig_{b}" for b in active_filters]
-    cols += [f"rms_{b}" for b in active_filters]
-    cols += [f"gmax_{b}" for b in active_filters] # maximum phase gap folded by P0
+    # Per-band stats
+    cols += [f"N_{b}" for b in filters]
+    cols += [f"sig_{b}" for b in filters]
+    cols += [f"rms_{b}" for b in filters]
+    cols += [f"gmax_{b}" for b in filters] # maximum phase gap folded by P0
     
     # Period / fit summary
     cols += ["Zmax", "P0", "chi2", "fobj", "P", "E", "phi_rise", "M_fit"]
 
     # Theta params (match decomposition.py theta_params_out ordering)
-    cols += [f"m0_{b}" for b in active_filters]
-    cols += [f"amp_{b}" for b in active_filters]
+    cols += [f"m0_{b}" for b in filters]
+    cols += [f"amp_{b}" for b in filters]
 
     # Fourier series params
     cols += [f"A{j}" for j in range(1, M_MAX + 1)]
@@ -185,7 +188,7 @@ def _chunk_loader_threading(source_ids, phot_dir, mode, desc = None,
                             max_workers=12, chunk_size=200):
     nmax = len(source_ids)
     dl = {}
-    with ThreadPoolExecutor(max_workers=max_workers) as executor:
+    with ThreadPoolExecutor(max_workersf=max_workers) as executor:
         futures = []
         for i in range(0, nmax, chunk_size):
             batch_ids = source_ids[i:min(i + chunk_size, nmax)]

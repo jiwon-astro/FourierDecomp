@@ -168,7 +168,8 @@ def fourier_decomp(sid, mode='ogle', init='lasso',
     # Load data
     if mode is None: mode = get_data_config().mode
     cfg = get_data_config(mode)
-    filters = cfg.filters; activated_bands = cfg.activated_bands; n_bands = cfg.n_bands
+    filters = cfg.filters; activated_bands = cfg.activated_bands
+    n_bands_full = cfg.n_bands_full; n_bands = cfg.n_bands # number of activated bands
 
     M_MAX, M_MIN = params.M_MAX, params.M_MIN
 
@@ -313,13 +314,13 @@ def fourier_decomp(sid, mode='ogle', init='lasso',
     Q_out[:M_fit_final] = Q_fit
     
     flag = 0
-    N, sig, rms = np.zeros(n_bands, dtype='int'), np.zeros(n_bands), np.zeros(n_bands)
+    N, sig, rms = np.zeros(n_bands_full, dtype='int'), np.zeros(n_bands_full), np.zeros(n_bands_full)
     phi_rise = np.nan
     
-    m0_out, amp_out = np.zeros(n_bands), np.zeros(n_bands)
+    m0_out, amp_out = np.zeros(n_bands_full), np.zeros(n_bands_full)
     theta_fit_tmpl = (A_fit, Q_fit) 
-    for i, ib in enumerate(activated_bands):
-        mask = bmask[ib]
+    for i, flt in enumerate(filters):
+        mask = bmask[i]
         if not np.any(mask):
             N[i] = 0
             flag = 1 # no data
@@ -330,21 +331,24 @@ def fourier_decomp(sid, mode='ogle', init='lasso',
         
         w_ft = 1 / np.maximum(emag_ft, params.ERR_FLOOR)**2
         # photometric error (w/o genuine pulsation)
-        dm_ft = mag_ft-m0_data[ib]
+        dm_ft = mag_ft-m0_data[i]
         sig[i] = np.sqrt(np.average(dm_ft**2, weights=w_ft))
 
         # amplitude refitting`
         phi_ft = ((t_ft - E)/P)%1
         h_ft = H(theta_fit_tmpl, phi_ft, M_fit_final, coef_mode='AQ')
-        m0_out[i] = m0[i]; amp_out[i] = amp[i] 
-        if use_refit:
+        if i in activated_bands: 
+            m0_out[i] = m0[i]; amp_out[i] = amp[i]
+        else: m0_out[i] = m0_data[i]; amp_out[i] = amp_data[i] # not used for Fourier coefficient calculations
+
+        if use_refit and (len(h_ft)>5):
             good = np.ones(len(h_ft),dtype=bool)
             for _ in range(params.REFIT_MAXITER):
                 # refit (m0, amp)
                 # these chi2_ampl values are evaluated only with "good" values.
                 m0_out[i], amp_out[i], chi2_ampl = refit_m0_amp(h_ft, mag_ft, w_ft, opt_method='lsq',
                                                                good=good)
-                amp_ratio = amp_out[i] / amp_data[ib]
+                amp_ratio = amp_out[i] / amp_data[i]
                 if (0.7 > amp_ratio) or (1.3 < amp_ratio):
                     amp_lb, amp_ub = params.Amin, params.Amax # default (naive amplitude boundary)
                     m0_out[i], amp_out[i], chi2_ampl = refit_m0_amp(h_ft, mag_ft, w_ft, opt_method='optim',
@@ -360,7 +364,7 @@ def fourier_decomp(sid, mode='ogle', init='lasso',
                 good = ~resmask
 
             if verbose:
-                print(f"[Refinement / {filters[ib]}] used = {n_curr}/{len(h_ft)} | m0 = {m0[i]:.4f} -> {m0_out[i]:.4f} | amp = {amp[i]:.4f} -> {amp_out[i]:.4f} (ratio(data) = {amp_ratio:.2f}) | CHI2 = {chi2_ampl:.2f}")
+                print(f"[Refinement / {flt}] used = {n_curr}/{len(h_ft)} | m0 = {m0[i]:.4f} -> {m0_out[i]:.4f} | amp = {amp[i]:.4f} -> {amp_out[i]:.4f} (ratio(data) = {amp_ratio:.2f}) | CHI2 = {chi2_ampl:.2f}")
             
         else:
             f_ft = m0_out[i] + amp_out[i] * h_ft

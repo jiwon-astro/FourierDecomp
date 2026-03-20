@@ -65,6 +65,6 @@ adaptive_lam = True
 use_refit    = True
 
 REFIT_SIGMA = 3.0
-REFIT_MAXITER = 5
+REFIT_MAXITER = 3
 
 init = 'rrfit' # lsq or rrfit
