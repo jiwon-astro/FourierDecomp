@@ -338,7 +338,8 @@ def fourier_decomp(sid, mode='ogle', init='lasso',
         phi_ft = ((t_ft - E)/P)%1
         h_ft = H(theta_fit_tmpl, phi_ft, M_fit_final, coef_mode='AQ')
         if i in activated_bands: 
-            m0_out[i] = m0[i]; amp_out[i] = amp[i]
+            ib = np.where(activated_bands == i)[0][0]
+            m0_out[i] = m0[ib]; amp_out[i] = amp[ib]
         else: m0_out[i] = m0_data[i]; amp_out[i] = amp_data[i] # not used for Fourier coefficient calculations
 
         if use_refit and (len(h_ft)>5):
