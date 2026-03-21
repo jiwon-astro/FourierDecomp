@@ -125,7 +125,7 @@ def thread_run(fd_output, ids, period_fit = period_fit,
     if not fd_output.exists():
         with open(fd_output, 'w', newline='') as f:
             writer = csv.writer(f, delimiter=' ')
-            columns = build_fd_header()
+            columns = build_fd_header(mode)
             writer.writerow(columns)
 
     # pool
