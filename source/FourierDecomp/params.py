@@ -9,6 +9,7 @@ DATA_CONFIGS = {
         'lc_colors': ['yellowgreen', 'orange'],
         'lc_markers': ['o', 's'],
         'activated_bands': [1],  # indices in prefixs
+        'wesenheit_factor': 1.55
     },
     'gaia': {
         'filters': np.array(['g', 'bp', 'rp']),
@@ -16,6 +17,7 @@ DATA_CONFIGS = {
         'lc_colors': ['#000000', '#0343DF', '#E50000'],
         'lc_markers': ['o', 's', 'D'],
         'activated_bands': [0, 1, 2],  # indices in prefixs
+        'wesenheit_factor':1.90
     },
 }
 

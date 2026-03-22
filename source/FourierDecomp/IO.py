@@ -20,6 +20,7 @@ class DataConfig:
     activated_bands: list        # indices in prefixs
     n_bands_full: int
     n_bands: int
+    R: float
     lc_colors: list
     lc_markers: list
 
@@ -48,6 +49,7 @@ def get_data_config(mode: Optional[str] = None) -> DataConfig:
 
     colors = list(base['lc_colors'])
     markers = list(base['lc_markers'])
+    R = base['wesenheit_factor']
 
     return DataConfig(
         mode=mode,
@@ -56,6 +58,7 @@ def get_data_config(mode: Optional[str] = None) -> DataConfig:
         activated_bands=act,
         n_bands_full=n_b_full,
         n_bands=n_b,
+        R=R,
         lc_colors=colors,
         lc_markers=markers,
     )
