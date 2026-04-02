@@ -75,6 +75,14 @@ def coverage_entropy(phase, n_grid = 50):
 # ====================================
 # binning
 # ====================================
+def phase_gap_mask(phase n_grid = 50):
+    """
+    Boolean mask of length n_grid:
+      1 -> this phase bin contains at least one observation
+      0 -> no observation in this bin
+    """
+    return (phase_bin_counts(phase, n_grid=n_grid) > 0).astype(np.int8)
+
 def _window_coverage(mask, center_bin, width = 8):
     # circular padding
     n = len(mask); wh = width//2
@@ -150,14 +158,14 @@ def lightcurve_quality(sid, df_FD, n_grid=50, mode=None,
         # statistics
         fval_grid_ft  = F(theta_ft, phi_grid, M_MAX, coef_mode='AQ')
         occupation_ft = occupied_fraction(phi_ft, n_grid=n_grid)
-        phase_mask_ft = (occupation_ft > 0)
+        phase_mask_ft = phase_gap_mask(phi_ft, n_grid=n_grid)
         bin_res_ft    = binned_residual_function(phi_ft, res_ft, 
                                                 n_grid=n_grid, statistic=statistic)
         gmax_ft       = gap_max(phi_ft)
         H_coverage_ft = coverage_entropy(phi_ft, n_grid=n_grid)
         
         quality_ft = QualityRecord(sid, band=flt, n_epoch=n_epoch,
-                                   fval_grid=fval_grid_ft, occupied_fraction=occupation_ft, phase_mask = phase_mask_ft,
+                                   fval_grid=fval_grid_ft, occupied_fraction=occupation_ft, phase_mask=phase_mask_ft,
                                    binned_residual=bin_res_ft, gmax=gmax_ft, coverage_entropy=H_coverage_ft)
         quality_dict[flt] = quality_ft
     return quality_dict
