@@ -187,7 +187,7 @@ def build_quality_table(ids, df_FD, mode=None, bands=None, n_grid=50,
                 bands=bands,
                 statistic=statistic,
             )
-            if len(row_i) > 0: rows.append(row_i)
+            if len(row_i) > 0: rows += row_i
         except Exception as e:
             print(f"[quality] skip ID={sid}: {e}")
 
