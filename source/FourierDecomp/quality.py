@@ -118,14 +118,14 @@ def lightcurve_quality(sid, df_FD, n_grid=50, mode=None,
     # ------------------
     # 1) Fourer Decomposition
     fd_row = df_FD[df_FD['ID'] == sid]
-    m0s  = fd_row[['m0_{f}' for f in filters]].to_numpy(dtype=float) # mean magnitude
-    amps = fd_row[['amp_{f}' for f in filters]].to_numpy(dtype=float) # amplitude
-    P = fd_row[period_key] # period
-    E = fd_row[epoch_key]  # epoch
+    m0s  = fd_row[[f'm0_{f}' for f in filters]].to_numpy(dtype=float) # mean magnitude
+    amps = fd_row[[f'amp_{f}' for f in filters]].to_numpy(dtype=float) # amplitude
+    P = float(fd_row[period_key]) # period
+    E = float(fd_row[epoch_key])  # epoch
     coef_A_names = [f"A{i}" for i in range(1, M_MAX + 1)]
     coef_Q_names = [f"Q{i}" for i in range(1, M_MAX + 1)]
-    As = fd_row[coef_A_names].to_numpy(dtype=float) # fourier coefficients
-    Qs = fd_row[coef_Q_names].to_numpy(dtype=float)   
+    As = fd_row[coef_A_names].to_numpy(dtype=float)[0] # fourier coefficients
+    Qs = fd_row[coef_Q_names].to_numpy(dtype=float)[0] 
 
     # 2) Lightcurve
     t, mag, emag, bands = epoch_arrays(ls_data, sid, mode=mode)
