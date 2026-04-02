@@ -118,8 +118,8 @@ def lightcurve_quality(sid, df_FD, n_grid=50, mode=None,
     # ------------------
     # 1) Fourer Decomposition
     fd_row = df_FD[df_FD['ID'] == sid]
-    m0s  = fd_row[[f'm0_{f}' for f in filters]].to_numpy(dtype=float) # mean magnitude
-    amps = fd_row[[f'amp_{f}' for f in filters]].to_numpy(dtype=float) # amplitude
+    m0s  = fd_row[[f'm0_{f}' for f in filters]].to_numpy(dtype=float)[0] # mean magnitude
+    amps = fd_row[[f'amp_{f}' for f in filters]].to_numpy(dtype=float)[0] # amplitude
     P = float(fd_row[period_key]) # period
     E = float(fd_row[epoch_key])  # epoch
     coef_A_names = [f"A{i}" for i in range(1, M_MAX + 1)]
