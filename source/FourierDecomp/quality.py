@@ -1,6 +1,7 @@
 from dataclasses import dataclass, asdict
 from pathlib import Path
 from tqdm.notebook import tqdm
+from astropy.table import Table
 
 import numpy as np
 import pandas as pd
@@ -8,24 +9,6 @@ import pandas as pd
 from . import params
 from .IO import epoch_arrays, get_data_config
 from .LSQ import F
-
-# ========================================
-# Data containers
-# ========================================
-@dataclass
-class QualityRecord:
-    sid: str
-    band: str
-    n_epoch: int
-    fval_grid: float
-    occupied_fraction: float
-    phase_mask: float
-    binned_residual: float
-    gmax: float
-    coverage_entropy: float
-
-    def to_row(self):
-        return asdict(self)
     
 # ========================================
 # Phase coverage utils
@@ -114,19 +97,55 @@ def binned_residual_function(phase, residual, n_grid = 50, statistic = "mean"):
 # ==================================
 # main function
 # ==================================
+def _calc_quality_single(sid, args_ft, theta_ft, flt, n_grid=50, statistic='median'):
+
+    M_MAX = params.M_MAX
+    t_ft, mag_ft, emag_ft = args_ft
+    n_epoch = len(t_ft)
+    E = theta_ft[-1]
+    P = theta_ft[-2]
+
+    phi_grid = np.arange(0, 1, 1/n_grid) # set phase grid
+    # calculate residual
+    phi_ft = ((t_ft - E)/P)%1
+    fval = F(theta_ft, t_ft, M_MAX, coef_mode='AQ')
+    res_ft = mag_ft - fval # residual
+
+    # evaluation at phase grid
+    theta_ft_phi = theta_ft.copy()
+    theta_ft_phi[-2] = 1; theta_ft_phi[-1] = 0
+    phi_grid = np.arange(0, 1, 1/n_grid) # set phase grid
+    fval_grid_ft  = F(theta_ft_phi, phi_grid, M_MAX, coef_mode='AQ')
+
+    # statistics
+    occupation_ft = occupied_fraction(phi_ft, n_grid=n_grid)
+    phase_mask_ft = phase_gap_mask(phi_ft, n_grid=n_grid)
+    bin_res_ft    = binned_residual_function(phi_ft, res_ft, 
+                                            n_grid=n_grid, statistic=statistic)
+    gmax_ft       = gap_max(phi_ft)
+    H_coverage_ft = coverage_entropy(phi_ft, n_grid=n_grid)
+    
+    return {'ID':sid, 'band':flt, 'N':n_epoch,'occupied_fraction':occupation_ft, 
+            'gmax':gmax_ft, 'coverage_entropy':H_coverage_ft,
+            'fval_grid':fval_grid_ft,'residual_grid':bin_res_ft, 'phase_mask':phase_mask_ft}
+
+
 def lightcurve_quality(sid, df_FD, n_grid=50, mode=None, bands=None,
                        statistic='median', period_key='P', epoch_key='E'):
     if mode is None: mode = get_data_config().mode
     cfg = get_data_config(mode)
     filters = cfg.filters
     if bands is None: bands = filters # all-band
-
     M_MAX = params.M_MAX
+
     # -------------------
     # load data
     # ------------------
-    # 1) Fourer Decomposition
+    # 1) Fourer Decomposition result
     fd_row = df_FD[df_FD['ID'] == sid]
+    if len(fd_row) == 0:
+        raise ValueError(f"ID={sid} not found in df_FD")
+    
     m0s  = fd_row[[f"m0_{f}" for f in filters]].to_numpy(dtype=float)[0] # mean magnitude
     amps = fd_row[[f"amp_{f}" for f in filters]].to_numpy(dtype=float)[0] # amplitude
     P = float(fd_row[period_key]) # period
@@ -141,45 +160,26 @@ def lightcurve_quality(sid, df_FD, n_grid=50, mode=None, bands=None,
     bmask = [(bands == band) for band in filters]
 
     # ------------------
-    # grid evaluation
+    # evaluation
     # ------------------
-    phi_grid = np.arange(0, 1, 1/n_grid)
-    quality_dict = {}
+    quality_list = []
     for i, bm in enumerate(bmask):
         flt = filters[i]
         if not flt in bands: continue
-        t_ft, mag_ft, emag_ft = t[bm], mag[bm], emag[bm]
-        n_epoch = len(t_ft)
-
-        # calculate residual
-        phi_ft = ((t_ft - E)/P)%1
-        theta_ft = np.array([m0s[i], amps[i], As, Qs, 1, 0])
-        fval = F(theta_ft, phi_ft, M_MAX, coef_mode='AQ')
-        res_ft = mag_ft - fval # residual
-
-        # statistics
-        fval_grid_ft  = F(theta_ft, phi_grid, M_MAX, coef_mode='AQ')
-        occupation_ft = occupied_fraction(phi_ft, n_grid=n_grid)
-        phase_mask_ft = phase_gap_mask(phi_ft, n_grid=n_grid)
-        bin_res_ft    = binned_residual_function(phi_ft, res_ft, 
-                                                n_grid=n_grid, statistic=statistic)
-        gmax_ft       = gap_max(phi_ft)
-        H_coverage_ft = coverage_entropy(phi_ft, n_grid=n_grid)
-        
-        quality_ft = QualityRecord(sid, band=flt, n_epoch=n_epoch,
-                                   fval_grid=fval_grid_ft, occupied_fraction=occupation_ft, phase_mask=phase_mask_ft,
-                                   binned_residual=bin_res_ft, gmax=gmax_ft, coverage_entropy=H_coverage_ft)
-        quality_dict[flt] = quality_ft
-    return quality_dict
+        args_ft = (t[bm], mag[bm], emag[bm])
+        theta_ft = (m0s[i], amps[i], As, Qs, P, E)
+        q = _calc_quality_single(sid, args_ft, theta_ft, flt, n_grid=50, statistic='median')
+        if q is not None: quality_list.append(q)
+    return quality_list
 
 def build_quality_table(ids, df_FD, mode=None, bands=None, n_grid=50,
                         statistic='median', output_fpath=None, overwrite=True):
     if mode is None: mode = get_data_config().mode
 
-    tabs = []
+    rows = []
     for sid in tqdm(ids):
         try:
-            tab_i = lightcurve_quality(
+            row_i = lightcurve_quality(
                 sid=sid,
                 df_FD=df_FD,
                 n_grid=n_grid,
@@ -187,8 +187,12 @@ def build_quality_table(ids, df_FD, mode=None, bands=None, n_grid=50,
                 bands=bands,
                 statistic=statistic,
             )
-            if len(tab_i) > 0:
-                tabs.append(tab_i)
+            if len(row_i) > 0: rows.append(row_i)
         except Exception as e:
             print(f"[quality] skip ID={sid}: {e}")
+
+    out = Table(rows=rows)
+    if output_fpath is not None:
+        out.write(output_fpath, overwrite=overwrite)
+    return out
 
