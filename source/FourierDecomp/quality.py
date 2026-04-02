@@ -75,7 +75,7 @@ def coverage_entropy(phase, n_grid = 50):
 # ====================================
 # binning
 # ====================================
-def phase_gap_mask(phase n_grid = 50):
+def phase_gap_mask(phase, n_grid = 50):
     """
     Boolean mask of length n_grid:
       1 -> this phase bin contains at least one observation
