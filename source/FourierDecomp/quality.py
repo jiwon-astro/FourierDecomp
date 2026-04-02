@@ -194,6 +194,6 @@ def build_quality_table(ids, df_FD, mode=None, selected_bands=None, n_grid=50,
     out = Table(rows=rows)
     if output_fpath is not None:
         output_fpath.parent.mkdir(parents=True, exist_ok=True)
-        out.write(output_fpath, overwrite=overwrite)
+        out.write(output_fpath, format='ascii.ecsv', overwrite=overwrite)
     return out
 
