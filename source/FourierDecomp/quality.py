@@ -167,7 +167,7 @@ def lightcurve_quality(sid, df_FD, n_grid=50, mode=None, bands=None,
         flt = filters[i]
         if not flt in bands: continue
         args_ft = (t[bm], mag[bm], emag[bm])
-        theta_ft = (m0s[i], amps[i], As, Qs, P, E)
+        theta_ft = np.array([m0s[i], amps[i], As, Qs, P, E], dtype=object)
         q = _calc_quality_single(sid, args_ft, theta_ft, flt, n_grid=50, statistic='median')
         if q is not None: quality_list.append(q)
     return quality_list
@@ -186,7 +186,7 @@ def build_quality_table(ids, df_FD, mode=None, bands=None, n_grid=50,
                 mode=mode,
                 bands=bands,
                 statistic=statistic,
-            )
+            ) # -> list
             if len(row_i) > 0: rows += row_i
         except Exception as e:
             print(f"[quality] skip ID={sid}: {e}")
