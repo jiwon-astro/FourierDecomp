@@ -27,6 +27,9 @@ harmonics = 1 # maximum order of harmonics [P0, P0/n, n*P0]
 K = 5 # peak search for aliasing cleaning
 snr = 5 # relative peak strength for aliased frequency detection
 
+# --- light curve quality features ---
+n_grid = 50
+
 # --- fourier series ---
 M_MIN = 3   # minimum Fourier series order
 M_MAX = 15  # Max fourier order
