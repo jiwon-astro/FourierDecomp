@@ -1,5 +1,6 @@
 from dataclasses import dataclass, asdict
 from pathlib import Path
+from tqdm.notebook import tqdm
 
 import numpy as np
 import pandas as pd
@@ -113,12 +114,12 @@ def binned_residual_function(phase, residual, n_grid = 50, statistic = "mean"):
 # ==================================
 # main function
 # ==================================
-def lightcurve_quality(sid, df_FD, n_grid=50, mode=None,
+def lightcurve_quality(sid, df_FD, n_grid=50, mode=None, bands=None,
                        statistic='median', period_key='P', epoch_key='E'):
     if mode is None: mode = get_data_config().mode
     cfg = get_data_config(mode)
     filters = cfg.filters
-    n_bands_full = cfg.n_bands_full # number of activated bands
+    if bands is None: bands = filters # all-band
 
     M_MAX = params.M_MAX
     # -------------------
@@ -126,8 +127,8 @@ def lightcurve_quality(sid, df_FD, n_grid=50, mode=None,
     # ------------------
     # 1) Fourer Decomposition
     fd_row = df_FD[df_FD['ID'] == sid]
-    m0s  = fd_row[[f'm0_{f}' for f in filters]].to_numpy(dtype=float)[0] # mean magnitude
-    amps = fd_row[[f'amp_{f}' for f in filters]].to_numpy(dtype=float)[0] # amplitude
+    m0s  = fd_row[[f"m0_{f}" for f in filters]].to_numpy(dtype=float)[0] # mean magnitude
+    amps = fd_row[[f"amp_{f}" for f in filters]].to_numpy(dtype=float)[0] # amplitude
     P = float(fd_row[period_key]) # period
     E = float(fd_row[epoch_key])  # epoch
     coef_A_names = [f"A{i}" for i in range(1, M_MAX + 1)]
@@ -146,6 +147,7 @@ def lightcurve_quality(sid, df_FD, n_grid=50, mode=None,
     quality_dict = {}
     for i, bm in enumerate(bmask):
         flt = filters[i]
+        if not flt in bands: continue
         t_ft, mag_ft, emag_ft = t[bm], mag[bm], emag[bm]
         n_epoch = len(t_ft)
 
@@ -170,4 +172,23 @@ def lightcurve_quality(sid, df_FD, n_grid=50, mode=None,
         quality_dict[flt] = quality_ft
     return quality_dict
 
+def build_quality_table(ids, df_FD, mode=None, bands=None, n_grid=50,
+                        statistic='median', output_fpath=None, overwrite=True):
+    if mode is None: mode = get_data_config().mode
+
+    tabs = []
+    for sid in tqdm(ids):
+        try:
+            tab_i = lightcurve_quality(
+                sid=sid,
+                df_FD=df_FD,
+                n_grid=n_grid,
+                mode=mode,
+                bands=bands,
+                statistic=statistic,
+            )
+            if len(tab_i) > 0:
+                tabs.append(tab_i)
+        except Exception as e:
+            print(f"[quality] skip ID={sid}: {e}")
 
