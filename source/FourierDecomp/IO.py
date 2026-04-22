@@ -256,8 +256,7 @@ def _chunk_loader_threading(source_ids, phot_dir, mode, desc = None,
             dl.update(fut.result())
     return dl
 
-def data_loader(ident_fpath, phot_dir, mode=None, max_workers=12, chunk_size=200,
-                match_fpath=None, sep_tol=0.1):
+def data_loader(ident_fpath, phot_dir, mode=None, max_workers=12, chunk_size=200, sep_tol=0.1):
     #if (ident_fpath, str) or (ident_fpath, Path):
     #    ident_fpath = [ident_fpath]
     phot_dir = Path(phot_dir)
@@ -292,9 +291,7 @@ def data_loader(ident_fpath, phot_dir, mode=None, max_workers=12, chunk_size=200
 
     # ---- ZTF ----
     elif mode=="ztf":
-        if match_fpath is None:
-            match_fpath = phot_dir.parent
-        df_match = _read_match_table_ztf(match_fpath)
+        df_match = _read_match_table_ztf(ident_fpath)
         source_ids = df_match["ID"]
         dl = _chunk_loader_threading(
             source_ids,
