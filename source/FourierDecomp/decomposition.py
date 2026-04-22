@@ -184,6 +184,9 @@ def fourier_decomp(sid, mode='ogle', init='lasso',
         cep_type = df_ident['type_best_classification'][sid_mask][0]
         osc_type = df_ident['mode_best_classification'][sid_mask][0]
         pulsation = f'{cep_type}_{osc_type}'
+    elif mode=='ztf':
+        sid_mask = (df_ident['ID'] == sid)
+        pulsation = 'NaN'
 
     t, mag, emag, bands = epoch_arrays(ls_data, sid, mode=mode)
     bmask = [(bands == band) for band in filters]

@@ -83,10 +83,10 @@ def build_fd_header(mode = None):
     cfg = get_data_config(mode)
     filters = cfg.filters
     #active_idx = list(cfg.activated_bands)
-    #active_filters = [str(cfg.filters[i]) for i in active_idx]
+    #active_filters = [str(cfg.filters[i]) for i in active_idx]f
 
     cols = []
-    cols += ["ID", "pulsation"]
+    cols += ["ID", 'pulsation']
 
     # Per-band stats
     cols += [f"N_{b}" for b in filters]
