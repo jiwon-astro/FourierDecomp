@@ -256,7 +256,7 @@ def _chunk_loader_threading(source_ids, phot_dir, mode, desc = None,
             dl.update(fut.result())
     return dl
 
-def data_loader(ident_fpath, phot_dir, mode=None, max_workers=12, chunk_size=200, sep_tol=0.1):
+def data_loader(ident_fpath, phot_dir, mode=None, max_workers=12, chunk_size=200):
     #if (ident_fpath, str) or (ident_fpath, Path):
     #    ident_fpath = [ident_fpath]
     phot_dir = Path(phot_dir)
@@ -300,8 +300,7 @@ def data_loader(ident_fpath, phot_dir, mode=None, max_workers=12, chunk_size=200
             max_workers=max_workers,
             chunk_size=max(chunk_size, 200),
             desc="ztf_epoch_phot_from_match",
-            match_table=df_match,
-            sep_tol=sep_tol,
+            match_tbl=df_match
         )
 
     return df_ident, dl
