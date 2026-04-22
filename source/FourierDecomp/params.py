@@ -19,6 +19,14 @@ DATA_CONFIGS = {
         'activated_bands': [0, 1, 2],  # indices in prefixs
         'wesenheit_factor':1.90
     },
+    'ztf': {
+        'filters': np.array(['zg', 'zr', 'zi']),
+        'prefixs': np.array([0, 1, 2]),
+        'lc_colors': ['#4D96FF', '#87C55F', '#FF6B6B'],
+        'lc_markers': ['o', 's', 'D'],
+        'activated_bands': [0, 1, 2],  # indices in prefixs
+        'wesenheit_factor':[2.274, 2.905, 4.051] # (1) gi, (2) gr, (3) ri (Ngeow+2021) / Ag=3.518E,Ar=2.617E, andAi=1.971E (Green+2019)
+    }
 }
 
 # --- period search ---

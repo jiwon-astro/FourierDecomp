@@ -38,7 +38,7 @@ def get_data_config(mode: Optional[str] = None) -> DataConfig:
     mode = mode.lower().strip()
     base = DATA_CONFIGS[mode]
 
-    if mode not in ("ogle", "gaia"):
+    if mode not in ("ogle", "gaia", "ztf"):
         raise ValueError(f"Unknown data_class/mode: {mode}")
 
     flt = np.array(base['filters'], dtype=object)
@@ -148,14 +148,65 @@ def _load_chunk_gaia(source_ids, phot_dir):
             continue
     return data
 
+def _load_chunk_ztf(source_ids, phot_dir, match_tbl, sep_tol=0.1,
+                    id_col="ID", ztf_col="ztf_id", sep_col="sep"):
+    """
+    Gaia source_id 기준으로 match_table을 읽고,
+    sep <= sep_tol 인 ZTF oid 파일들을 읽어 하나의 source로 합침.
+    """
+    data = {}
+    phot_dir = Path(phot_dir)
+
+    target_ids = match_tbl[id_col]
+    ztf_ids = match_tbl[ztf_col]
+    seps = match_tbl[sep_col]
+
+    for sid in source_ids:
+        # Gaia cross-match가 된 것만 사용
+        m = (target_ids == sid) & np.isfinite(seps) & (seps <= sep_tol) & (ztf_ids >= 0)
+        if not np.any(m): continue
+
+        ztf_ids_matched = np.unique(ztf_ids[m])
+
+        tbls = []
+        for ztf_id in ztf_ids_matched:
+            candidates = [
+                phot_dir / f"ztf_{ztf_id}.ecsv",
+                phot_dir / "epoch_phot" / f"ztf_{ztf_id}.ecsv",
+            ]
+
+            fname = None
+            for cand in candidates:
+                if cand.exists():
+                    fname = cand
+                    break
+
+            if fname is None:
+                continue
+
+            try:
+                tbl = Table.read(fname, format="ascii.ecsv")
+                tbl["gaia_source_id"] = np.full(len(tbl), sid)
+                tbl["matched_ztf_id"] = np.full(len(tbl), ztf_id)
+                tbls.append(tbl)
+            except Exception:
+                continue
+
+        if not tbls:
+            continue
+
+        data[sid] = vstack(tbls, metadata_conflicts="silent")
+    return data
+
 def _load_chunk(source_ids, phot_dir, mode="ogle",**kwargs):
     if mode == "ogle":
         return _load_chunk_ogle(source_ids, phot_dir, **kwargs)
     elif mode == "gaia":
         return _load_chunk_gaia(source_ids, phot_dir, **kwargs)
+    elif mode == "ztf":
+        return _load_chunk_ztf(source_ids, phot_dir, **kwargs)
     else:
         raise ValueError(f"Unknown mode: {mode}")
-
 
 # --------------
 # identifiers
@@ -164,6 +215,11 @@ def _read_ident_gaia(query_fpath):
     # load gaia query data
     tab = Table.read(query_fpath, format='ascii.ecsv')
     return tab
+
+def _read_match_table_ztf(match_fpath):
+    # Gaia-ZTF match
+    match_fpath = Path(match_fpath)
+    return Table.read(match_fpath, format="ascii.ecsv")
 
 def _read_ident_ogle(ident_fpath_list):
     cat = []
@@ -188,19 +244,20 @@ def _read_ident_ogle(ident_fpath_list):
 # Bulk loader
 # --------------------
 def _chunk_loader_threading(source_ids, phot_dir, mode, desc = None, 
-                            max_workers=12, chunk_size=200):
+                            max_workers=12, chunk_size=200, **kwargs):
     nmax = len(source_ids)
     dl = {}
     with ThreadPoolExecutor(max_workers=max_workers) as executor:
         futures = []
         for i in range(0, nmax, chunk_size):
             batch_ids = source_ids[i:min(i + chunk_size, nmax)]
-            futures.append(executor.submit(_load_chunk, batch_ids, phot_dir, mode=mode))
+            futures.append(executor.submit(_load_chunk, batch_ids, phot_dir, mode=mode, **kwargs))
         for fut in tqdm(futures, desc=desc):
             dl.update(fut.result())
     return dl
 
-def data_loader(ident_fpath, phot_dir, mode=None, max_workers=12, chunk_size=200):
+def data_loader(ident_fpath, phot_dir, mode=None, max_workers=12, chunk_size=200,
+                match_fpath=None, sep_tol=0.1):
     #if (ident_fpath, str) or (ident_fpath, Path):
     #    ident_fpath = [ident_fpath]
     phot_dir = Path(phot_dir)
@@ -220,13 +277,10 @@ def data_loader(ident_fpath, phot_dir, mode=None, max_workers=12, chunk_size=200
                 desc=f"{cat_name}")
             dl.update(dl_cat)
 
-        return df_ident, dl
-
     # ---- GAIA ----
     elif mode=="gaia":
         df_ident = _read_ident_gaia(ident_fpath) # single file path
         source_ids = df_ident["SOURCE_ID"].astype(int).tolist()
-
         dl = _chunk_loader_threading(
             source_ids,
             phot_dir=phot_dir,
@@ -235,6 +289,24 @@ def data_loader(ident_fpath, phot_dir, mode=None, max_workers=12, chunk_size=200
             chunk_size=max(chunk_size, 500),  # 파일 열기 위주라 크게 잡는 편이 효율적일 때 많음
             desc="gaia_epoch_phot",
         )
+
+    # ---- ZTF ----
+    elif mode=="ztf":
+        if match_fpath is None:
+            match_fpath = phot_dir.parent
+        df_match = _read_match_table_ztf(match_fpath)
+        source_ids = df_match["ID"]
+        dl = _chunk_loader_threading(
+            source_ids,
+            phot_dir=phot_dir,
+            mode="ztf",
+            max_workers=max_workers,
+            chunk_size=max(chunk_size, 200),
+            desc="ztf_epoch_phot_from_match",
+            match_table=df_match,
+            sep_tol=sep_tol,
+        )
+
     return df_ident, dl
 
 
@@ -250,7 +322,6 @@ def wire_globals(module, ls_data, df_ident,
 # =============================================================================
 # Gaia epoch photometry support (DR3 ECSV)
 # =============================================================================
-
 def gaia_ZP_cal(flux, ferr, band):
     """
     Zeropoint calibration (VEGAMAG), following Gaia documentation.
@@ -345,6 +416,40 @@ def ogle_epoch_arrays(data_dict, source_id, filters=("V","I"), monitor=True):
             print(f'{flt} / {n_phot} epochs')
     return t, mag, emag, band
 
+def ztf_epoch_arrays(data_dict, source_id, filters=("zg", "zr", "zi"), monitor=True):
+    tbl = data_dict[source_id]
+    magerr = np.asarray(tbl["magerr"], dtype=float)
+    
+    # photometric error / quality cut
+    good = np.isfinite(magerr) & (magerr >= 0) & np.asarray(tbl["catflags"]) == 0
+    tbl = tbl[good]
+
+    # band subset
+    m = np.isin(tbl["filtercode"], filters)
+    tbl = tbl[m]
+
+    # time/mag/emag/band
+    t    = np.asarray(tbl["mjd"], dtype=float) 
+    mag  = np.asarray(tbl["mag"], dtype=float) 
+    emag = np.asarray(tbl["magerr"], dtype=float) 
+    band = np.asarray(tbl["filtercode"], dtype=object) 
+
+    # epoch-order sorting
+    if len(t) > 0:
+        srt = np.argsort(t)
+        t, mag, emag, band = t[srt], mag[srt], emag[srt], band[srt]
+
+    if monitor:
+        print(f"{source_id}")
+        ztf_ids = np.unique(np.asarray(tbl["matched_ztf_id"]))
+        print(f"matched ztf ids = {ztf_ids}")
+        if len(band) > 0:
+            flts, n_phots = np.unique(band, return_counts=True)
+            for flt, n_phot in zip(flts, n_phots):
+                print(f"{flt} / {n_phot} epochs")
+
+    return t, mag, emag, band
+
 # =============================================================================
 # unified epoch array getter for downstream code
 # =============================================================================
@@ -372,7 +477,9 @@ def epoch_arrays(data_dict, source_id, mode = None, filters=None, monitor=False)
         return ogle_epoch_arrays(data_dict, source_id, filters=filters, monitor=monitor)
     elif mode == "gaia":
         return gaia_epoch_arrays(data_dict, int(source_id), filters=filters, monitor=monitor)
+    elif mode == "ztf":
+        return ztf_epoch_arrays(data_dict, int(source_id), filters=filters, monitor=monitor)
 
-    raise ValueError("mode must be 'ogle' or 'gaia'")
+    raise ValueError("mode must be 'ogle', 'gaia' or 'ztf'")
 
 
