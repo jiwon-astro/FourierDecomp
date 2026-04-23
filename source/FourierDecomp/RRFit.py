@@ -102,7 +102,7 @@ def build_rrfit_jobs(sid, mode='gaia', bandpairs=(("g","bp"),("g","rp")),
         raise ValueError("unsupported p_bounds types")
     
     jobs = []
-    logP_bounds = [np.log10(params.pmin), np.log10(params.pmax)] + logP_bounds # global period scan
+    logP_bounds = [(np.log10(params.pmin), np.log10(params.pmax))] + logP_bounds # global period scan
     for iw, logP_bound in enumerate(logP_bounds):
         logP0 = np.mean(logP_bound)
         P0 = 10**logP0
