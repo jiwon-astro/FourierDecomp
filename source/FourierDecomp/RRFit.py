@@ -45,7 +45,7 @@ class RRFitJob:
         # photometric band pairs for simultaneous fit 
         return "+".join(self.selected_bands)
     @property
-    def bandpair_prerixs(self):
+    def bandpair_prefixs(self):
         # photometric band pairs for simultaneous fit 
         return "+".join(self.bands)
     @property
