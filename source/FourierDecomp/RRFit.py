@@ -130,7 +130,7 @@ def parse_rrfit_outputs(fpath):
     if len(tbl)==0: return None
     return dict(tbl[-1])
 
-def run_rrfit_job(job, rrfit_exe, base_workdir=None):
+def run_rrfit_job(job, rrfit_exe, base_workdir=None, is_test=False):
     if base_workdir is None:
         rrfit_exe = Path(rrfit_exe)
         base_workdir = rrfit_exe.parent / "temp"
@@ -140,7 +140,10 @@ def run_rrfit_job(job, rrfit_exe, base_workdir=None):
     # e.g.) job A -> rrfit_sid_1, job B -> rrfit_sid_2,...
     with tempfile.TemporaryDirectory(prefix=f"rrfit_{job.sid}_",
                                      dir=base_workdir) as td:
-        workdir = Path(td)
+        if is_test:
+            workdir = base_workdir / "test" # fixed directory
+            workdir.mkdir(parents=True, exist_ok=True) 
+        else: workdir = Path(td)
         write_rrfit_inputs(job, workdir)
 
         #subprocess - run shell command
