@@ -45,6 +45,10 @@ class RRFitJob:
         # photometric band pairs for simultaneous fit 
         return "+".join(self.selected_bands)
     @property
+    def bandpair_prerixs(self):
+        # photometric band pairs for simultaneous fit 
+        return "+".join(self.bands)
+    @property
     def job_id(self):
         return f"{self.sid}_{self.bandpair}_{self.window_idx:02d}"
 
@@ -149,7 +153,7 @@ def run_rrfit_job(job, rrfit_exe, base_workdir=None, is_test=False):
     with tempfile.TemporaryDirectory(prefix=f"rrfit_{job.sid}_",
                                      dir=base_workdir) as td:
         if is_test:
-            workdir = base_workdir / f"test_{job.window_idx:02d}" # fixed directory
+            workdir = base_workdir / f"test_{job.job_id}" # fixed directory
             workdir.mkdir(parents=True, exist_ok=True) 
         else: workdir = Path(td)
         write_rrfit_inputs(job, workdir)
@@ -157,7 +161,7 @@ def run_rrfit_job(job, rrfit_exe, base_workdir=None, is_test=False):
         #subprocess - run shell command
         proc = subprocess.run([str(rrfit_exe), str(workdir)], cwd=base_dir, 
                               capture_output=True, text=True) # return string
-        outname = f"rrfit_{job.bandpair}.out"
+        outname = f"rrfit_{job.bandpair_prefixs}.out"
         # single result for single job -> read last column
         row = parse_rrfit_outputs(workdir / outname) 
         return {
