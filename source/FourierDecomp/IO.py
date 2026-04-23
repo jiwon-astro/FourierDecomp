@@ -2,7 +2,7 @@
 import numpy as np
 import pandas as pd
 from dataclasses import dataclass
-from typing import Optional, Dict, Any
+from typing import Optional, Union
 from tqdm.notebook import tqdm
 from concurrent.futures import ThreadPoolExecutor  # Threading
 from pathlib import Path
@@ -477,5 +477,59 @@ def epoch_arrays(data_dict, source_id, mode = None, filters=None, monitor=False)
         return ztf_epoch_arrays(data_dict, int(source_id), filters=filters, monitor=monitor)
 
     raise ValueError("mode must be 'ogle', 'gaia' or 'ztf'")
+
+# ============================
+# RRFit input lightcurve
+# ============================
+@dataclass
+class RRFitLC:
+    sid: Union[str, int]
+    fitlc_path: Union[str, Path] # .fitlc path
+    t: np.ndarray
+    mag: np.ndarray
+    emag: np.ndarray
+    bands: np.ndarray
+        
+def prepare_fitlc(sid, mode='gaia', ls_data=None, fitlc_path=None, workdir=None):
+    cfg = get_data_config(mode)
+    filters = cfg.filters; prefixs = cfg.prefixs
+    
+    if fitlc_path is None:
+        if workdir is None: 
+            raise ValueError("workdir is required to export a lightcurve as .fitlc")
+        workdir = Path(workdir)
+        workdir.mkdir(parents=True, exist_ok=True)
+    
+    fitlc_columns = ["Band","time(days)","mag(mag)","mag_err"]
+    fitlc_hdr = " ".join(fitlc_columns)
+    
+    # 1) .fitlc file already exists
+    if fitlc_path is not None:
+        # flts: band prefixs
+        arr = np.loadtxt(fitlc_path, ndmin=2)
+        flts = arr[:, 0].astype(int)
+        t    = arr[:, 1].astype(float)
+        mag  = arr[:, 2].astype(float)
+        emag = arr[:, 3].astype(float)
+        bands = np.asarray([filters[np.where(prefixs==i)[0][0]] for i in flts], 
+                           dtype='object')
+        return RRFitLC(sid=sid, fitlc_path=str(fitlc_path),
+                           t=t, mag=mag, emag=emag, bands=bands)
+        
+    # 2) load lightcurve from ls_data, write new .fitlc file
+    if ls_data is not None:
+        t, mag, emag, bands = epoch_arrays(ls_data, sid, mode=mode)
+        flts = np.asarray([prefixs[np.where(filters==b)[0][0]] for b in bands], 
+                          dtype='int')
+        # write .fitlc file
+        fitlc_path = workdir / f"{sid}.fitlc"
+        with open(fitlc_path, "w") as f:
+            f.write(fitlc_hdr+"\n")
+            for bi, ti, mi, ei in zip(flts, t, mag, emag):
+                f.write(f"{bi:d} {ti:.8f} {mi:.6f} {ei:.6f}\n")
+        return RRFitLC(sid=sid, fitlc_path=str(fitlc_path),
+                       t=t, mag=mag, emag=emag, bands=bands)
+    
+    raise ValueError("Either fitlc_path or ls_data must be provided.")
 
 

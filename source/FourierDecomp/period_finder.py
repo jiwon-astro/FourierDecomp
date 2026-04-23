@@ -3,12 +3,14 @@ import matplotlib.pyplot as plt
 
 from gatspy import periodic # multiband lomb-scargle
 from scipy.signal import find_peaks, peak_prominences
+from scipy.ndimage import median_filter
 from scipy.optimize import minimize_scalar # brent method
 from astropy.stats import sigma_clip
 
 from .params import pmin, pmax, n0, delta_P_tol
 from .IO import get_data_config
 
+from scipy.ndimage import median_filter
 # ==================================
 fmin = 1/pmax # expected minimum frequency [days^-1] (<100d)
 fmax = 1/pmin # expected maximum frequency [days^-1](anomalous cepheids - 0.4d)
@@ -35,6 +37,15 @@ def calc_fgrid(t, n0 = 5):
     
     return f, period, delta_f
 
+def local_background(y, win=201):
+    bg = median_filter(y, size=win, mode='nearest')
+    resid = y - bg
+    mad = median_filter(np.abs(resid), size=win, mode='nearest')
+    sig = 1.4826 * mad
+    sig = np.maximum(sig, 1e-6)
+    return bg, sig
+
+# ======= window function =======
 def window_function(t, bmask, f):
     t0, T = t[0], t[-1]-t[0] #initial epoch & length of time window    
     # calculate window function power spectrum
@@ -58,12 +69,48 @@ def window_alias_mask(freqs, f0, f_alias, f_alias_tol=0.01, n_alias = 2):
         mask|=(np.abs(freqs - (f0 + n*f_alias)) < f_alias_tol) | (np.abs(freqs - (f0 - n*f_alias)) < f_alias_tol)
     return mask
 
+# ======= aliased / harmonic solutions ========
 def harmonic_periods(P0, harmonics = 2):
     Ps = [P0]
     for n in range(2, harmonics + 1):
         if n * P0 <= pmax: Ps.append(n * P0) # subharmonic in frequency (overtone in period)
         if P0 / n >= pmin: Ps.append(P0 / n) # harmonic in frequency (subharmonic in period)
     return Ps
+
+def aliased_periods(P, alias_freqs, n=1, m=1):
+    alias_freqs = np.asarray(alias_freqs).reshape(-1,1)
+    P2s = []
+    for sign in [-1, 1]:
+        Ps = np.vstack([1/np.abs(n/P+m*sign*alias_freqs)])
+        P2s.append(Ps)
+    return np.vstack(P2s)
+
+def cluster_periods(periods, logP_tol=0.05, min_gap=0.0, max_width=None,
+                    return_boundary=True):
+    periods = np.asarray(periods, dtype=float)
+    periods = periods[np.isfinite(periods) & (periods > 0)]
+    if len(periods) == 0: return []
+
+    logPs = np.sort(np.log10(periods))
+    intervals = [(x - logP_tol, x + logP_tol, [x]) for x in logPs]
+
+    merged = []
+    cur_lb, cur_ub, cur_members = intervals[0]
+    for lb, ub, members in intervals[1:]:
+        overlap = (lb <= cur_ub + min_gap)
+        new_width = max(cur_ub, ub) - cur_lb
+        if overlap and (max_width is None or new_width <= max_width):
+            cur_ub = max(cur_ub, ub)
+            cur_members.extend(members)
+        else:
+            merged.append((cur_lb, cur_ub, cur_members))
+            cur_lb, cur_ub, cur_members = lb, ub, members
+
+    merged.append((cur_lb, cur_ub, cur_members))
+    if return_boundary:
+        boundaries = [(lb, ub) for lb, ub, _ in merged]
+        return boundaries
+    return [np.array(m) for _, _, m in merged] # members
 
 # ========= Period Search with Lomb-Scargle algorithm ==========
 def robust_period_search(t, mag, emag, bands, 
@@ -127,6 +174,54 @@ def robust_period_search(t, mag, emag, bands,
         
     return Ps, Zs
 
+def period_fit_boundary_search(t, mag, emag, bands, n0 = 5, K = 5, Kw = 10, 
+                               snr_LS = 3, snr_window = 5, harmonics = 2,
+                               logP_tol = 0.1, max_width=1.0):
+    freqs, periods, delta_f = calc_fgrid(t, n0 = n0)
+    
+    cfg = get_data_config()
+    filters = cfg.filters
+    activated_bands = cfg.activated_bands
+    bmask = [(bands==filters[ib]) for ib in activated_bands] # original definition: include all passbands?
+
+    # 1) evaluate Lomb-Scargle power
+    model.fit(t, mag, emag, bands)
+    Pf_LS = model.periodogram(periods)
+    sigma_Pf_LS = np.std(Pf_LS)
+    pidx = find_peaks(Pf_LS, height = snr_LS * sigma_Pf_LS)[0] 
+    # select peaks having large contrast (prominence)
+    prom = peak_prominences(Pf_LS, pidx)[0]
+    prom_thres = np.median(prom)
+    pidx = find_peaks(Pf_LS, height = snr_LS * sigma_Pf_LS, prominence = prom_thres)[0] 
+    # select K peaks
+    pidx = pidx[np.argsort(Pf_LS[pidx])[::-1]][:K]
+    P_coarse = periods[pidx]; Z_coarse = Pf_LS[pidx]
+
+    # 3) window function
+    Pw = window_function(t, bmask, freqs)
+    bkg_Pw, sig_Pw = local_background(Pw, win = 201) # calculate local background level by moving-mdeian filter
+    Pw_flat = Pw - bkg_Pw #/ sig_P_W
+
+    distance = max(10, int(5*n0))
+    pidx_w = find_peaks(Pw_flat, height = snr_window * sig_Pw, 
+                    prominence=max(5, 2*snr_window)*sig_Pw, distance=distance)[0] 
+    prom_alias = peak_prominences(Pw_flat, pidx_w)[0]
+    pidx_w_sorted = pidx_w[np.argsort(prom_alias)][::-1] # sorting with respect to prominences 
+    # Pw_alias = Pw[pidx_sorted][:Kw]
+    alias_freqs = freqs[pidx_w_sorted][:Kw]
+    
+    # 4) calculate aliased periods
+    P_alias = []
+    for n in range(1, 1+harmonics):
+        P2s = aliased_periods(P_coarse, alias_freqs, n=n, m=1)
+        P_alias.append(np.hstack(P2s))
+    P_alias = np.hstack(P_alias)
+
+    # 5) clustering 
+    logP_cluster = cluster_periods(P_alias, logP_tol=logP_tol, max_width=max_width,
+                                   return_boundary=True)
+    return P_coarse, Z_coarse, alias_freqs, logP_cluster
+    
 # ======== plot lomb-scargle ===========
 def plot_LS(freqs, periods, Pf_LS, peaks = None, thresh = None):
     fig, ax = plt.subplots(2,1, figsize = (15,8))
