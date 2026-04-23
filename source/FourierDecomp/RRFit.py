@@ -23,9 +23,9 @@ class RRFitJob:
     selected_bands: list 
     P0: float # initial period: Lomb-Scargle
     p0flag: float
+    window_idx: int
     tmpl_start: int = 1
     tmpl_end: int = 25
-    window_idx: int
     pmin: float = 0.5
     pmax: float = 300
     Amin: float = 0.05
