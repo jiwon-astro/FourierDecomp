@@ -216,6 +216,7 @@ def period_fit_boundary_search(t, mag, emag, bands, n0 = 5, K = 5, Kw = 10,
         P2s = aliased_periods(P_coarse, alias_freqs, n=n, m=1)
         P_alias.append(np.hstack(P2s))
     P_alias = np.hstack(P_alias)
+    P_alias = P_alias[(P_alias >= pmin) & (P_alias <= pmax)] # ensure range
 
     # 5) clustering 
     logP_cluster = cluster_periods(P_alias, logP_tol=logP_tol, max_width=max_width,

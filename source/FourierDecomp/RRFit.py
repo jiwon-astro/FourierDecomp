@@ -103,6 +103,9 @@ def build_rrfit_jobs(sid, mode='gaia', bandpairs=(("g","bp"),("g","rp")),
         P0 = 10**logP0
         pmin = max(params.pmin, 10**(logP_bound[0]-logP_tol)) # add padding
         pmax = min(params.pmax, 10**(logP_bound[1]+logP_tol))
+        if pmin > pmax: 
+            
+            continue
         
         # previous definition of p0flag: relative offset from P_Gaia
         # calculate p0flag by comparing the LS best period and representative value of given period range
