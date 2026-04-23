@@ -72,6 +72,8 @@ def build_rrfit_jobs(sid, mode='gaia', bandpairs=(("g","bp"),("g","rp")),
                      n0=5, K=5, Kw=10, snr_LS=3., snr_window=5.,harmonics=2,
                      logP_tol=0.1, max_width=1.0, tmpl_start=1, tmpl_end=25):
     
+    from . import params
+    
     cfg = get_data_config(mode)
     filters = cfg.filters
     
@@ -99,8 +101,8 @@ def build_rrfit_jobs(sid, mode='gaia', bandpairs=(("g","bp"),("g","rp")),
     for iw, logP_bound in enumerate(logP_bounds):
         logP0 = np.mean(logP_bound)
         P0 = 10**logP0
-        pmin = 10**(logP_bound[0]-logP_tol) # add padding
-        pmax = 10**(logP_bound[1]+logP_tol)
+        pmin = max(params.pmin, 10**(logP_bound[0]-logP_tol)) # add padding
+        pmax = min(params.pmax, 10**(logP_bound[1]+logP_tol))
         
         # previous definition of p0flag: relative offset from P_Gaia
         # calculate p0flag by comparing the LS best period and representative value of given period range
