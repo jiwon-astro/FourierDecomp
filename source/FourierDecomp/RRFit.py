@@ -131,9 +131,7 @@ def parse_rrfit_outputs(fpath):
 def run_rrfit_job(job, rrfit_exe, base_workdir=None):
     if base_workdir is None:
         rrfit_exe = Path(rrfit_exe)
-        base_workdir = rrfit_exe.parent 
-        
-    base_workdir = base_workdir / 'temp'
+        base_workdir = rrfit_exe.parent / "temp"
     base_workdir.mkdir(parents=True, exist_ok=True)
 
     # run multiple rrfit jobs in the temporary directory
@@ -170,7 +168,7 @@ def write_source_rrfit_results(outdir, sid, results,
     # meta data
     meta = Table({"sid": [sid], "P0_LS": [P0_LS], "Zmax": [Zmax],
                   "alias_freqs": [alias_freqs.tolist()], "logP_bounds": [logP_bounds],})
-    meta_fname = outdir / f"{sid}_rrfit_meta.ecsv"
+    meta_fname = outdir / f"rrfit_{sid}_meta.ecsv"
     meta.write(meta_fname, format='ascii.ecsv', overwrite=True)
 
     # summary table
@@ -200,7 +198,7 @@ def run_rrfit_single(sid, rrfit_exe, outdir, mode=None, fitlc_path=None, ls_data
               bandpairs=(("g", "bp"), ("g", "rp")), 
               max_workers_job=6, **kwargs):
     if workdir is None:
-        workdir = Path(rrfit_exe).parent
+        workdir = Path(rrfit_exe).parent / "temp"
 
     P0_LS, Zmax, jobs, alias_freqs, logP_bounds = build_rrfit_jobs(
         sid=sid, mode=mode,
