@@ -147,7 +147,7 @@ def run_rrfit_job(job, rrfit_exe, base_workdir=None, is_test=False):
         write_rrfit_inputs(job, workdir)
 
         #subprocess - run shell command
-        proc = subprocess.run([rrfit_exe, str(workdir)], cwd=workdir, 
+        proc = subprocess.run([rrfit_exe, str(workdir)], cwd=base_workdir, 
                               capture_output=True, text=True) # return string
         outname = f"rrfit_{job.bandpair}.out"
         # single result for single job -> read last column
