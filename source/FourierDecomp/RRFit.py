@@ -93,7 +93,7 @@ def build_rrfit_jobs(sid, mode='gaia', bandpairs=(("g","bp"),("g","rp")),
         pidx = np.argmax(Z_LS)
         P0_LS, Zmax = P_LS[pidx], Z_LS[pidx] # best LS period
     elif isinstance(p_bounds,(list, tuple)) and len(p_bounds)==1:
-        p_bounds = [p_bounds] # ensure dimension
+        logP_bounds = [(np.log10(p_bounds[0]), np.log10(p_bounds[1]))] # ensure dimension
     else:
         raise ValueError("unsupported p_bounds types")
     
@@ -134,12 +134,14 @@ def parse_rrfit_outputs(fpath):
     return dict(tbl[-1])
 
 def run_rrfit_job(job, rrfit_exe, base_workdir=None, is_test=False):
-    rrfit_exe = Path(rrfit_exe)
+    rrfit_exe = Path(rrfit_exe).resolve()
     base_dir = rrfit_exe.parent
-    if (base_dir / 'template.dat').exists():
-        raise ValueError("RRFit requires the Fourier template file template.dat")
+    tmpl_path = base_dir / "templates.dat"
+    if not tmpl_path.exists():
+        raise FileNotFoundError(f"RRFit requires the Fourier template file template.dat: {tmpl_path}")
     if base_workdir is None:
         base_workdir = base_dir / "temp"
+    else: base_workdir = Path(base_workdir)
     base_workdir.mkdir(parents=True, exist_ok=True)
 
     # run multiple rrfit jobs in the temporary directory
@@ -153,7 +155,7 @@ def run_rrfit_job(job, rrfit_exe, base_workdir=None, is_test=False):
         write_rrfit_inputs(job, workdir)
 
         #subprocess - run shell command
-        proc = subprocess.run([rrfit_exe, str(workdir)], cwd=base_workdir, 
+        proc = subprocess.run([str(rrfit_exe), str(workdir)], cwd=base_dir, 
                               capture_output=True, text=True) # return string
         outname = f"rrfit_{job.bandpair}.out"
         # single result for single job -> read last column

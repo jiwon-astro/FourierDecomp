@@ -493,12 +493,13 @@ class RRFitLC:
 def prepare_fitlc(sid, mode='gaia', ls_data=None, fitlc_path=None, workdir=None):
     cfg = get_data_config(mode)
     filters = cfg.filters; prefixs = cfg.prefixs
-    
+
     fitlc_columns = ["Band","time(days)","mag(mag)","mag_err"]
     fitlc_hdr = " ".join(fitlc_columns)
     
     # 1) .fitlc file already exists
     if fitlc_path is not None:
+        fitlc_path = Path(fitlc_path).resolve() # absolute path
         # flts: band prefixs
         arr = np.loadtxt(fitlc_path, ndmin=2)
         flts = arr[:, 0].astype(int)
@@ -514,7 +515,7 @@ def prepare_fitlc(sid, mode='gaia', ls_data=None, fitlc_path=None, workdir=None)
     if ls_data is not None:
         if workdir is None: 
             raise ValueError("workdir is required to export a lightcurve as .fitlc")
-        workdir = Path(workdir)
+        workdir = Path(workdir).resolve()
         workdir.mkdir(parents=True, exist_ok=True)
     
         t, mag, emag, bands = epoch_arrays(ls_data, sid, mode=mode)
