@@ -12,7 +12,6 @@ import subprocess
 import json
 import tempfile
 
-
 from FourierDecomp.IO import get_data_config, prepare_fitlc
 from FourierDecomp.period_finder import period_fit_boundary_search
 
@@ -20,8 +19,8 @@ from FourierDecomp.period_finder import period_fit_boundary_search
 class RRFitJob:
     sid: Union[str, int]
     fitlc_path: str
-    filters: list[str]
-    selected_bands: list[str] 
+    filters: list
+    selected_bands: list 
     P0: float # initial period: Lomb-Scargle
     p0flag: float
     tmpl_start: int = 1
