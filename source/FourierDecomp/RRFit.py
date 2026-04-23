@@ -9,7 +9,6 @@ from dataclasses import dataclass
 from typing import Union
 from concurrent.futures import ProcessPoolExecutor
 import subprocess
-import json
 import tempfile
 
 from FourierDecomp.IO import get_data_config, prepare_fitlc
@@ -169,16 +168,11 @@ def write_source_rrfit_results(outdir, sid, results,
                                P0_LS=np.nan, Zmax=np.nan, logP_bounds=None, alias_freqs=None):
     outdir = Path(outdir)
     outdir.mkdir(parents=True, exist_ok=True)
-    # full json dump
-    meta = {
-        "sid": sid,
-        "P(LS)": P0_LS, "Zmax": Zmax,
-        "logP_bounds": logP_bounds if logP_bounds is not None else [],
-        "alias_freqs": alias_freqs.tolist() if isinstance(alias_freqs, np.ndarray) else [],
-    }
-    meta_fname = outdir / f"{sid}_rrfit_meta.json"
-    with open(meta_fname, "w") as f:
-        json.dump(meta, f, indent=2)
+    # meta data
+    meta = Table({"sid": [sid], "P0_LS": [P0_LS], "Zmax": [Zmax],
+                  "alias_freqs": [alias_freqs.tolist()], "logP_bounds": [logP_bounds],})
+    meta_fname = outdir / f"{sid}_rrfit_meta.ecsv"
+    meta.write(meta_fname, format='ascii.ecsv', overwrite=True)
 
     # summary table
     rows = []
