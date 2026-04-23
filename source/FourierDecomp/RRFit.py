@@ -206,7 +206,9 @@ def write_source_rrfit_results(outdir, sid, results,
 def run_rrfit_single(sid, rrfit_exe, outdir, mode=None, fitlc_path=None, ls_data=None, workdir=None, 
               bandpairs=(("g", "bp"), ("g", "rp")), 
               max_workers_job=6, **kwargs):
-    
+    if workdir is None:
+        workdir = Path(rrfit_exe).parent
+
     P0_LS, Zmax, jobs, alias_freqs, logP_bounds = build_rrfit_jobs(
         sid=sid, mode=mode,
         fitlc_path=fitlc_path, ls_data=ls_data, workdir=workdir,
