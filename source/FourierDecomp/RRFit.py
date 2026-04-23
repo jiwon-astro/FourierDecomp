@@ -134,9 +134,12 @@ def parse_rrfit_outputs(fpath):
     return dict(tbl[-1])
 
 def run_rrfit_job(job, rrfit_exe, base_workdir=None, is_test=False):
+    rrfit_exe = Path(rrfit_exe)
+    base_dir = rrfit_exe.parent
+    if (base_dir / 'template.dat').exists():
+        raise ValueError("RRFit requires the Fourier template file template.dat")
     if base_workdir is None:
-        rrfit_exe = Path(rrfit_exe)
-        base_workdir = rrfit_exe.parent / "temp"
+        base_workdir = base_dir / "temp"
     base_workdir.mkdir(parents=True, exist_ok=True)
 
     # run multiple rrfit jobs in the temporary directory
