@@ -494,12 +494,6 @@ def prepare_fitlc(sid, mode='gaia', ls_data=None, fitlc_path=None, workdir=None)
     cfg = get_data_config(mode)
     filters = cfg.filters; prefixs = cfg.prefixs
     
-    if fitlc_path is None:
-        if workdir is None: 
-            raise ValueError("workdir is required to export a lightcurve as .fitlc")
-        workdir = Path(workdir)
-        workdir.mkdir(parents=True, exist_ok=True)
-    
     fitlc_columns = ["Band","time(days)","mag(mag)","mag_err"]
     fitlc_hdr = " ".join(fitlc_columns)
     
@@ -518,6 +512,11 @@ def prepare_fitlc(sid, mode='gaia', ls_data=None, fitlc_path=None, workdir=None)
         
     # 2) load lightcurve from ls_data, write new .fitlc file
     if ls_data is not None:
+        if workdir is None: 
+            raise ValueError("workdir is required to export a lightcurve as .fitlc")
+        workdir = Path(workdir)
+        workdir.mkdir(parents=True, exist_ok=True)
+    
         t, mag, emag, bands = epoch_arrays(ls_data, sid, mode=mode)
         flts = np.asarray([prefixs[np.where(filters==b)[0][0]] for b in bands], 
                           dtype='int')

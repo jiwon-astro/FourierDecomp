@@ -203,9 +203,9 @@ def write_source_rrfit_results(outdir, sid, results,
     tbl.write(summary_fname, format='ascii.basic')
     return summary_fname, meta_fname
 
-def run_rrfit_single(sid, rrfit_exe, outdir, mode=None, fitlc_path=None, ls_data=None, 
+def run_rrfit_single(sid, rrfit_exe, outdir, mode=None, fitlc_path=None, ls_data=None, workdir=None, 
               bandpairs=(("g", "bp"), ("g", "rp")), 
-              workdir=None, max_workers_job=6, **kwargs):
+              max_workers_job=6, **kwargs):
     
     P0_LS, Zmax, jobs, alias_freqs, logP_bounds = build_rrfit_jobs(
         sid=sid, mode=mode,
