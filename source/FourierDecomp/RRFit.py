@@ -201,7 +201,7 @@ def write_source_rrfit_results(outdir, sid, results,
 
 def run_rrfit_single(sid, rrfit_exe, outdir, mode=None, fitlc_path=None, ls_data=None, workdir=None, 
               bandpairs=(("g", "bp"), ("g", "rp")), 
-              max_workers_job=6, **kwargs):
+              max_workers_job=6, is_test=False, **kwargs):
     if workdir is None:
         workdir = Path(rrfit_exe).parent / "temp"
 
@@ -214,7 +214,7 @@ def run_rrfit_single(sid, rrfit_exe, outdir, mode=None, fitlc_path=None, ls_data
     results = []
     if len(jobs) > 0:
         with ProcessPoolExecutor(max_workers=max_workers_job) as ex:
-            futs = [ex.submit(run_rrfit_job, job, rrfit_exe) for job in jobs]
+            futs = [ex.submit(run_rrfit_job, job, rrfit_exe, workdir, is_test) for job in jobs]
             for fut in futs: results.append(fut.result())
 
     summary_fpath, meta_fpath = write_source_rrfit_results(outdir, sid, results, 
