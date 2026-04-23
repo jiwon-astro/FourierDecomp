@@ -39,7 +39,7 @@ class RRFitJob:
         return np.arange(len(self.filters)) 
     @property
     def bands(self):
-        return [self.prefixs[np.where(self.filters==b)[0][0]] for b in self.selected_bands]
+        return [int(self.prefixs[self.filters==b]) for b in self.selected_bands]
     @property
     def bandpair(self):
         # photometric band pairs for simultaneous fit 
@@ -50,7 +50,6 @@ class RRFitJob:
 
 def write_rrfit_inputs(job, workdir):
     # open rrfit.param/fitlc_list/lomb_scargle.txt file, and write the inputs
-    filters = job.filters # full photometric bands of given data (e.g. Gaia: g, bp, rp)
     if job.n_bands>2: 
         raise ValueError("RRFit supports only <=2-band fitting simultaneously.")
     # rrfit.param
