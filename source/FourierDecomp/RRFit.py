@@ -149,7 +149,7 @@ def run_rrfit_job(job, rrfit_exe, base_workdir=None, is_test=False):
     with tempfile.TemporaryDirectory(prefix=f"rrfit_{job.sid}_",
                                      dir=base_workdir) as td:
         if is_test:
-            workdir = base_workdir / "test" # fixed directory
+            workdir = base_workdir / f"test_{job.window_idx:02d}" # fixed directory
             workdir.mkdir(parents=True, exist_ok=True) 
         else: workdir = Path(td)
         write_rrfit_inputs(job, workdir)
