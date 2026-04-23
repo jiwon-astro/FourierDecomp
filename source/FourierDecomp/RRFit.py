@@ -102,14 +102,13 @@ def build_rrfit_jobs(sid, mode='gaia', bandpairs=(("g","bp"),("g","rp")),
         raise ValueError("unsupported p_bounds types")
     
     jobs = []
+    logP_bounds = [np.log10(params.pmin), np.log10(params.pmax)] + logP_bounds # global period scan
     for iw, logP_bound in enumerate(logP_bounds):
         logP0 = np.mean(logP_bound)
         P0 = 10**logP0
         pmin = max(params.pmin, 10**(logP_bound[0]-logP_tol)) # add padding
         pmax = min(params.pmax, 10**(logP_bound[1]+logP_tol))
-        if pmin > pmax: 
-            
-            continue
+        if pmin > pmax: continue
         
         # previous definition of p0flag: relative offset from P_Gaia
         # calculate p0flag by comparing the LS best period and representative value of given period range
@@ -213,7 +212,7 @@ def write_source_rrfit_results(outdir, sid, results,
 
 def run_rrfit_single(sid, rrfit_exe, outdir, mode=None, fitlc_path=None, ls_data=None, workdir=None, 
               bandpairs=(("g", "bp"), ("g", "rp")), 
-              max_workers_job=6, is_test=False, **kwargs):
+              max_workers_job=8, is_test=False, **kwargs):
     if workdir is None:
         workdir = Path(rrfit_exe).parent / "temp"
 
