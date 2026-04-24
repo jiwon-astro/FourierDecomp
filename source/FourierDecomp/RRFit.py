@@ -159,7 +159,7 @@ def build_rrfit_job_pool(sids, mode='gaia', bandpairs=(("g","bp"),("g","rp")),
            fitlc_path_i = fitlc_list.get(sid, None)
 
        P0_LS, Zmax, jobs, alias_freqs, logP_bounds = build_rrfit_jobs(
-           sid, mode='gaia', bandpairs=(("g","bp"),("g","rp")), 
+           sid, mode=mode, bandpairs=bandpairs, 
            ls_data=ls_data, fitlc_path=fitlc_path_i, workdir=workdir, **kwargs
            )
        
