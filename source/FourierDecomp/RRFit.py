@@ -7,9 +7,11 @@ from astropy.table import Table, vstack, unique, join
 
 from dataclasses import dataclass
 from typing import Union
+from collections import defaultdict
 from concurrent.futures import ProcessPoolExecutor
 import subprocess
 import tempfile
+import traceback
 
 from FourierDecomp.IO import get_data_config, prepare_fitlc
 from FourierDecomp.period_finder import period_fit_boundary_search
@@ -51,7 +53,20 @@ class RRFitJob:
     @property
     def job_id(self):
         return f"{self.sid}_{self.bandpair}_{self.window_idx:02d}"
+    
+def parse_rrfit_outputs(fpath):
+    # fpath: RRFit output file path
+    if not fpath.exists(): return None
+    try:  
+        tbl = Table.read(fpath, format='ascii')
+    except Exception: 
+        return None
+    if len(tbl)==0: return None
+    return dict(tbl[-1])
 
+# ==============================================
+# Setup RRFit inputs / Process jobs
+# ==============================================
 def write_rrfit_inputs(job, workdir):
     # open rrfit.param/fitlc_list/lomb_scargle.txt file, and write the inputs
     if job.n_bands>2: 
@@ -126,20 +141,43 @@ def build_rrfit_jobs(sid, mode='gaia', bandpairs=(("g","bp"),("g","rp")),
                        )
     return P0_LS, Zmax, jobs, alias_freqs, logP_bounds
 
-def parse_rrfit_outputs(fpath):
-    # fpath: RRFit output file path
-    if not fpath.exists(): return None
-    try:  
-        tbl = Table.read(fpath, format='ascii')
-    except Exception: 
-        return None
-    if len(tbl)==0: return None
-    return dict(tbl[-1])
+def build_rrfit_job_pool(sids, mode='gaia', bandpairs=(("g","bp"),("g","rp")),
+                         ls_data=None, fitlc_list=None, workdir=None, outdir=None, **kwargs):
+    """
+    Create RRFitJob and return Lomb-Scargle metadata for all sources
+    """
+    job_pool = []
+    meta_pool = {}
+    for i, sid in enumerate(sids):
+       if fitlc_list is None: fitlc_path_i = None
+       elif isinstance(fitlc_list, (list, np.ndarray)):
+           # presumming the same order
+           if len(sids)!=len(fitlc_list):
+               raise ValueError(f"Dimension mismatch between sids={len(sids)} and fitlc_list={len(fitlc_list)}")
+           fitlc_path_i = fitlc_list[i]
+       elif isinstance(fitlc_list, dict):
+           fitlc_path_i = fitlc_list.get(sid, None)
 
+       P0_LS, Zmax, jobs, alias_freqs, logP_bounds = build_rrfit_jobs(
+           sid, mode='gaia', bandpairs=(("g","bp"),("g","rp")), 
+           ls_data=ls_data, fitlc_path=fitlc_path_i, workdir=workdir, **kwargs
+           )
+       
+       meta_pool[sid] = {"sid": sid, "P0_LS": P0_LS, "Zmax": Zmax,
+                  "alias_freqs": alias_freqs.tolist(), "logP_bounds": logP_bounds, "n_jobs":len(jobs)
+                  }
+       job_pool.extend(jobs)
+    return job_pool, meta_pool
+
+# ========================================
+# RRFit job executor 
+# ========================================
+# Individual jobs run in separated temporary folders
 def run_rrfit_job(job, rrfit_exe, base_workdir=None, is_test=False):
     rrfit_exe = Path(rrfit_exe).resolve()
     base_dir = rrfit_exe.parent
     tmpl_path = base_dir / "templates.dat"
+    outname = f"rrfit_{job.bandpair_prefixs}.out"
     if not tmpl_path.exists():
         raise FileNotFoundError(f"RRFit requires the Fourier template file template.dat: {tmpl_path}")
     if base_workdir is None:
@@ -154,13 +192,16 @@ def run_rrfit_job(job, rrfit_exe, base_workdir=None, is_test=False):
         if is_test:
             workdir = base_workdir / f"test_{job.job_id}" # fixed directory
             workdir.mkdir(parents=True, exist_ok=True) 
+            # remove remaining files
+            for fname in ["rrfit.param","fitlc_list","lomb_scargle.txt",outname]:
+                fpath = workdir / fname
+                if fpath.exists(): fpath.unlink()
         else: workdir = Path(td)
         write_rrfit_inputs(job, workdir)
 
         #subprocess - run shell command
         proc = subprocess.run([str(rrfit_exe), str(workdir)], cwd=base_dir, 
                               capture_output=True, text=True) # return string
-        outname = f"rrfit_{job.bandpair_prefixs}.out"
         # single result for single job -> read last column
         row = parse_rrfit_outputs(workdir / outname) 
         return {
@@ -177,6 +218,9 @@ def run_rrfit_job(job, rrfit_exe, base_workdir=None, is_test=False):
             "result": row,
         }
     
+# ================================
+# Export results
+# ================================
 def write_source_rrfit_results(outdir, sid, results,
                                P0_LS=np.nan, Zmax=np.nan, logP_bounds=None, alias_freqs=None):
     outdir = Path(outdir)
@@ -210,9 +254,15 @@ def write_source_rrfit_results(outdir, sid, results,
     tbl.write(summary_fname, format='ascii.basic')
     return summary_fname, meta_fname
 
-def run_rrfit_single(sid, rrfit_exe, outdir, mode=None, fitlc_path=None, ls_data=None, workdir=None, 
-              bandpairs=(("g", "bp"), ("g", "rp")), 
-              max_workers_job=8, is_test=False, **kwargs):
+# ================================
+# Main function
+# ================================
+def run_rrfit_single(sid, rrfit_exe, outdir, 
+                     mode=None, fitlc_path=None, ls_data=None, workdir=None, 
+                     bandpairs=(("g", "bp"), ("g", "rp")), 
+                     max_workers_job=8, is_test=False, **kwargs):
+    outdir = Path(outdir)
+    outdir.mkdir(parents=True, exist_ok=True)
     if workdir is None:
         workdir = Path(rrfit_exe).parent / "temp"
 
@@ -231,3 +281,69 @@ def run_rrfit_single(sid, rrfit_exe, outdir, mode=None, fitlc_path=None, ls_data
     summary_fpath, meta_fpath = write_source_rrfit_results(outdir, sid, results, 
                                             P0_LS=P0_LS, Zmax=Zmax, logP_bounds=logP_bounds, alias_freqs=alias_freqs)
     return {"sid": sid, "n_jobs": len(jobs), "summary": str(summary_fpath), "meta": str(meta_fpath)}
+
+def run_rrfit(sids, rrfit_exe, outdir, mode=None, fitlc_list=None, ls_data=None, workdir=None, 
+              bandpairs=(("g", "bp"), ("g", "rp")), 
+              max_workers=8, is_test=False, **kwargs):
+    outdir = Path(outdir)
+    outdir.mkdir(parents=True, exist_ok=True)
+    if workdir is None:
+        workdir = Path(rrfit_exe).parent / "temp"
+    
+    # build jobs
+    job_pool, meta_pool = build_rrfit_job_pool(
+        sids=sids, mode=mode, bandpairs=bandpairs, ls_data=ls_data, fitlc_list=fitlc_list,
+        workdir=workdir, outdir=outdir, **kwargs
+    )
+
+    # run all jobs
+    results_pool = defaultdict(list)
+    log_rows = []
+
+    with ProcessPoolExecutor(max_workers=max_workers) as ex:
+        futs = [ex.submit(run_rrfit_job, job, rrfit_exe, workdir, is_test) for job in job_pool]
+        for fut in futs: 
+            r = fut.result()
+            results_pool[r["sid"]].append(r)
+            # log
+            log_rows.append({
+                "sid": r["sid"],
+                "job_id": r["job_id"],
+                "window_idx": r["window_idx"],
+                "bandpair": r["bandpair"],
+                "P0": r["P0"],
+                "pmin": r["pmin"],
+                "pmax": r["pmax"],
+                "p0flag": r["p0flag"],
+                "returncode": r["returncode"],
+                "result_ok": r["result"] is not None,
+                "stderr": r["stderr"][:500] if isinstance(r["stderr"], str) else "",
+            })
+    #write result to summary/meta file
+    source_rows = []
+    for sid in sids:
+        meta = meta_pool[sid]
+        results = results_pool.get(sid,[]) # collect results from separated jobs of a given source
+        summary_fpath, meta_fpath = write_source_rrfit_results(outdir, sid, results, 
+                                            P0_LS=meta['P0_LS'], Zmax=meta['Zmax'], 
+                                            logP_bounds=meta['logP_bounds'], alias_freqs=meta['alias_freqs'])
+        n_success = sum(int(r["returncode"] == 0 and r["result"] is not None) for r in results)
+        source_rows.append({
+            "sid": sid,
+            "n_jobs_total": meta["n_jobs"],
+            "n_jobs_finished": len(results),
+            "n_jobs_success": n_success,
+            "summary": str(summary_fpath),
+            "meta": str(meta_fpath),
+        })
+    
+    # 4) save logs
+    job_log_tbl = Table(log_rows)
+    job_log_tbl.write(outdir / "rrfit_job_log.ecsv", format="ascii.ecsv", overwrite=True)
+
+    source_log_tbl = Table(source_rows)
+    source_log_tbl.write(outdir / "rrfit_source_log.ecsv", format="ascii.ecsv", overwrite=True)
+
+    return source_log_tbl, job_log_tbl
+
+
