@@ -1,21 +1,67 @@
-from pathlib import Path
+import os
+import signal
 import numpy as np
 import matplotlib.pyplot as plt
 import pandas as pd
+from pathlib import Path
+from dataclasses import dataclass
+from typing import Union
 from tqdm.notebook import tqdm
 from astropy.table import Table, vstack, unique, join
 
-from dataclasses import dataclass
-from typing import Union
-from collections import defaultdict
-from concurrent.futures import ProcessPoolExecutor
+
 import subprocess
 import tempfile
-import traceback
+import threading
+from collections import defaultdict
+from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor
 
 from FourierDecomp.IO import get_data_config, prepare_fitlc
 from FourierDecomp.period_finder import period_fit_boundary_search
 
+_ACTIVE_PROCS = {}
+_ACTIVE_LOCK = threading.Lock()
+
+# =============================================
+# Process managing
+# =============================================
+def _register_proc(job_id, proc):
+    with _ACTIVE_LOCK:
+        _ACTIVE_PROCS[job_id] = proc
+
+def _unregister_proc(job_id):
+    with _ACTIVE_LOCK:
+        _ACTIVE_PROCS.pop(job_id, None)
+
+def kill_all_active_processes():
+    """
+    Kill all currently running rrfit.e subprocess groups.
+    Works on POSIX systems.
+    """
+    with _ACTIVE_LOCK:
+        items = list(_ACTIVE_PROCS.items())
+
+    for job_id, proc in items:
+        try:
+            if proc.poll() is None: # subprocess.Popen -> checking the running status of process 
+                os.killpg(proc.pid, signal.SIGTERM)
+        except Exception:
+            pass
+
+    # forced termination
+    for job_id, proc in items:
+        try:
+            proc.wait(timeout=1.0)
+        except Exception:
+            try:
+                if proc.poll() is None:
+                    os.killpg(proc.pid, signal.SIGKILL)
+            except Exception:
+                pass
+
+# ==============================
+# Helpers
+# ==============================
 @dataclass
 class RRFitJob:
     sid: Union[str, int]
@@ -199,9 +245,21 @@ def run_rrfit_job(job, rrfit_exe, base_workdir=None, is_test=False):
         else: workdir = Path(td)
         write_rrfit_inputs(job, workdir)
 
-        #subprocess - run shell command
-        proc = subprocess.run([str(rrfit_exe), str(workdir)], cwd=base_dir, 
-                              capture_output=True, text=True) # return string
+        # subprocess - run shell command
+        # RRFit.e runs as a separated process from parent Python process
+        try:
+            proc = subprocess.Popen([str(rrfit_exe), str(workdir)], cwd=base_dir,
+                                stdout=subprocess.PIPE,
+                                stderr=subprocess.PIPE, 
+                                text=True, # return string
+                                start_new_session=True, # process group separation
+                                ) 
+            _register_proc(job.job_id, proc)
+            stdout, stderr = proc.communicate() # waiting for child process to end
+            returncode = proc.returncode
+        finally:
+            _unregister_proc(job.job_id)
+
         # single result for single job -> read last column
         row = parse_rrfit_outputs(workdir / outname) 
         return {
@@ -212,9 +270,9 @@ def run_rrfit_job(job, rrfit_exe, base_workdir=None, is_test=False):
             "pmin": job.pmin,
             "pmax": job.pmax,
             "p0flag": job.p0flag,
-            "returncode": proc.returncode,
-            "stdout": proc.stdout,
-            "stderr": proc.stderr,
+            "returncode": returncode,
+            "stdout": stdout,
+            "stderr": stderr,
             "result": row,
         }
     
@@ -227,7 +285,7 @@ def write_source_rrfit_results(outdir, sid, results,
     outdir.mkdir(parents=True, exist_ok=True)
     # meta data
     meta = Table({"sid": [sid], "P0_LS": [P0_LS], "Zmax": [Zmax],
-                  "alias_freqs": [alias_freqs.tolist()], "logP_bounds": [logP_bounds],})
+                  "alias_freqs": [alias_freqs], "logP_bounds": [logP_bounds],})
     meta_fname = outdir / f"rrfit_{sid}_meta.ecsv"
     meta.write(meta_fname, format='ascii.ecsv', overwrite=True)
 
@@ -248,10 +306,10 @@ def write_source_rrfit_results(outdir, sid, results,
             # unpack results (read from RRFit output file)
             for k, v in r["result"].items(): row[k] = v
         rows.append(row)
-    if len(rows)>0: tbl = Table(rows)
-    else: tbl = Table()
+
+    tbl = Table(rows) if rows else Table()
     summary_fname = outdir / f"rrfit_{sid}.summary"
-    tbl.write(summary_fname, format='ascii.basic')
+    tbl.write(summary_fname, format='ascii.basic', overwrite=True)
     return summary_fname, meta_fname
 
 # ================================
@@ -260,7 +318,7 @@ def write_source_rrfit_results(outdir, sid, results,
 def run_rrfit_single(sid, rrfit_exe, outdir, 
                      mode=None, fitlc_path=None, ls_data=None, workdir=None, 
                      bandpairs=(("g", "bp"), ("g", "rp")), 
-                     max_workers_job=8, is_test=False, **kwargs):
+                     max_workers=8, is_test=False, **kwargs):
     outdir = Path(outdir)
     outdir.mkdir(parents=True, exist_ok=True)
     if workdir is None:
@@ -273,14 +331,22 @@ def run_rrfit_single(sid, rrfit_exe, outdir,
     )
 
     results = []
-    if len(jobs) > 0:
-        with ProcessPoolExecutor(max_workers=max_workers_job) as ex:
-            futs = [ex.submit(run_rrfit_job, job, rrfit_exe, workdir, is_test) for job in jobs]
-            for fut in futs: results.append(fut.result())
+    try:
+        if jobs:
+            with ThreadPoolExecutor(max_workers=max_workers) as ex:
+                futs = [ex.submit(run_rrfit_job, job, rrfit_exe, workdir, is_test) for job in jobs]
+                for fut in futs: results.append(fut.result())
+    except KeyboardInterrupt:
+        kill_all_active_processes()
+        raise
 
     summary_fpath, meta_fpath = write_source_rrfit_results(outdir, sid, results, 
                                             P0_LS=P0_LS, Zmax=Zmax, logP_bounds=logP_bounds, alias_freqs=alias_freqs)
-    return {"sid": sid, "n_jobs": len(jobs), "summary": str(summary_fpath), "meta": str(meta_fpath)}
+    return {"sid": sid, 
+            "n_jobs": len(jobs), 
+            "summary": str(summary_fpath), 
+            "meta": str(meta_fpath)}
+
 
 def run_rrfit(sids, rrfit_exe, outdir, mode=None, fitlc_list=None, ls_data=None, workdir=None, 
               bandpairs=(("g", "bp"), ("g", "rp")), 
@@ -296,53 +362,86 @@ def run_rrfit(sids, rrfit_exe, outdir, mode=None, fitlc_list=None, ls_data=None,
         workdir=workdir, outdir=outdir, **kwargs
     )
 
-    # run all jobs
+    # track source-wise job status
     results_pool = defaultdict(list)
+    n_done_pool = defaultdict(int)
+    n_total_pool = {sid: meta_pool[sid]["n_jobs"] for sid in sids}
+    source_written = set()
+
     log_rows = []
-
-    with ProcessPoolExecutor(max_workers=max_workers) as ex:
-        futs = [ex.submit(run_rrfit_job, job, rrfit_exe, workdir, is_test) for job in job_pool]
-        for fut in futs: 
-            r = fut.result()
-            results_pool[r["sid"]].append(r)
-            # log
-            log_rows.append({
-                "sid": r["sid"],
-                "job_id": r["job_id"],
-                "window_idx": r["window_idx"],
-                "bandpair": r["bandpair"],
-                "P0": r["P0"],
-                "pmin": r["pmin"],
-                "pmax": r["pmax"],
-                "p0flag": r["p0flag"],
-                "returncode": r["returncode"],
-                "result_ok": r["result"] is not None,
-                "stderr": r["stderr"][:500] if isinstance(r["stderr"], str) else "",
-            })
-    #write result to summary/meta file
     source_rows = []
-    for sid in sids:
-        meta = meta_pool[sid]
-        results = results_pool.get(sid,[]) # collect results from separated jobs of a given source
-        summary_fpath, meta_fpath = write_source_rrfit_results(outdir, sid, results, 
-                                            P0_LS=meta['P0_LS'], Zmax=meta['Zmax'], 
-                                            logP_bounds=meta['logP_bounds'], alias_freqs=meta['alias_freqs'])
-        n_success = sum(int(r["returncode"] == 0 and r["result"] is not None) for r in results)
-        source_rows.append({
-            "sid": sid,
-            "n_jobs_total": meta["n_jobs"],
-            "n_jobs_finished": len(results),
-            "n_jobs_success": n_success,
-            "summary": str(summary_fpath),
-            "meta": str(meta_fpath),
-        })
-    
-    # 4) save logs
-    job_log_tbl = Table(log_rows)
-    job_log_tbl.write(outdir / "rrfit_job_log.ecsv", format="ascii.ecsv", overwrite=True)
 
-    source_log_tbl = Table(source_rows)
-    source_log_tbl.write(outdir / "rrfit_source_log.ecsv", format="ascii.ecsv", overwrite=True)
+    # run all jobs
+    try:
+        with ProcessPoolExecutor(max_workers=max_workers) as ex:
+            futs = {ex.submit(run_rrfit_job, job, rrfit_exe, workdir, is_test): job
+                     for job in job_pool
+                     }
+            for fut, job in futs.item(): 
+                sid = job.sid
+                r = fut.result()
+                results_pool[sid].append(r)
+                n_done_pool[sid] += 1
+
+                # log
+                log_rows.append({
+                    "sid": r["sid"],
+                    "job_id": r["job_id"],
+                    "window_idx": r["window_idx"],
+                    "bandpair": r["bandpair"],
+                    "P0": r["P0"],
+                    "pmin": r["pmin"],
+                    "pmax": r["pmax"],
+                    "p0flag": r["p0flag"],
+                    "returncode": r["returncode"],
+                    "result_ok": r["result"] is not None,
+                    "stderr": r["stderr"][:500] if isinstance(r["stderr"], str) else "",
+                })
+
+                # if all jobs end for a given source
+                if (sid not in source_written) and (n_done_pool[sid]>=n_total_pool[sid]):
+                    # collect results from separated jobs of a given source
+                    meta = meta_pool[sid]
+                    results = results_pool.get(sid,[]) 
+                     #write result to summary/meta file
+                    summary_fpath, meta_fpath = write_source_rrfit_results(outdir, sid, results, 
+                                                        P0_LS=meta['P0_LS'], Zmax=meta['Zmax'], 
+                                                        logP_bounds=meta['logP_bounds'], 
+                                                        alias_freqs=meta['alias_freqs'])
+                    n_success = sum(int(r["returncode"] == 0 and r["result"] is not None) 
+                                    for r in results
+                                    )
+                    
+                    source_rows.append({
+                        "sid": sid,
+                        "n_jobs_total": meta["n_jobs"],
+                        "n_jobs_finished": len(results),
+                        "n_jobs_success": n_success,
+                        "summary": str(summary_fpath),
+                        "meta": str(meta_fpath),
+                    })
+
+                    # 4) update/save logs
+                    job_log_tbl = Table(log_rows)
+                    job_log_tbl.write(outdir / "rrfit_job_log.ecsv", 
+                                      format="ascii.ecsv", overwrite=True)
+
+                    source_log_tbl = Table(source_rows)
+                    source_log_tbl.write(outdir / "rrfit_source_log.ecsv", 
+                                         format="ascii.ecsv", overwrite=True)
+    
+    except KeyboardInterrupt:
+        kill_all_active_processes()
+        # completed sources already have their own summary/meta files -> partial output
+        if log_rows:
+            job_log_tbl = Table(log_rows)
+            job_log_tbl.write(outdir / "rrfit_job_log.ecsv", 
+                              format="ascii.ecsv", overwrite=True)
+        if source_rows:
+            source_log_tbl = Table(source_rows)
+            source_log_tbl.write(outdir / "rrfit_source_log.ecsv", 
+                                    format="ascii.ecsv", overwrite=True)
+        raise
 
     return source_log_tbl, job_log_tbl
 
