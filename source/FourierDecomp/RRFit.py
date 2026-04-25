@@ -363,7 +363,9 @@ def load_rrfit_plan(plan_fpath, sids=None):
 # RRFit job executor 
 # ========================================
 # Individual jobs run in separated temporary folders.
-def run_rrfit_job(job, rrfit_exe, base_workdir=None, is_test=False):
+def run_rrfit_job(job, rrfit_exe, base_workdir=None, is_test=False,
+                  timeout=180):
+    # typical RRFit execution time ~2m30s (for 25 templates)
     rrfit_exe = Path(rrfit_exe).resolve()
     base_dir = rrfit_exe.parent
     tmpl_path = base_dir / "templates.dat"
@@ -399,7 +401,7 @@ def run_rrfit_job(job, rrfit_exe, base_workdir=None, is_test=False):
                                 start_new_session=True, # process group separation
                                 ) 
             _register_proc(job.job_id, proc)
-            stdout, stderr = proc.communicate() # waiting for child process to finish
+            stdout, stderr = proc.communicate(timeout=timeout) # waiting for child process to finish
             returncode = proc.returncode
         finally:
             _unregister_proc(job.job_id)
@@ -491,10 +493,24 @@ def run_rrfit(sids, rrfit_exe, outdir, workdir=None, mode=None, fitlc_list=None,
         with ThreadPoolExecutor(max_workers=max_workers) as ex:
             futs = {ex.submit(run_rrfit_job, job, rrfit_exe, workdir, is_test): job
                      for job in job_pool}
-            with tqdm(total=len(sids), desc='Run RRFit') as pbar:
-                for fut, job in as_completed(futs.items()): 
+            with tqdm(total=len(sids), desc='Sources') as pbar, \
+                 tqdm(total=len(job_pool), desc='RRFit Jobs') as job_pbar:
+                for fut in as_completed(futs):
+                    job = futs[fut]
                     sid = job.sid
-                    r = fut.result()
+                    try:
+                        r = fut.result()
+                    except Exception as e:
+                        r = {"sid": sid, "job_id": job.job_id,
+                             "bandpair": job.bandpair,
+                             "P0": job.P0, "window_idx": job.window_idx,
+                             "pmin": job.pmin, "pmax": job.pmax,
+                             "p0flag": job.p0flag, "returncode": -999,
+                             "stdout": "","stderr": repr(e),"result": None,
+                            }
+
+                    job_pbar.update(1)
+
                     results_pool[sid].append(r)
                     n_done_pool[sid] += 1
 
@@ -535,14 +551,14 @@ def run_rrfit(sids, rrfit_exe, outdir, workdir=None, mode=None, fitlc_list=None,
                         source_written.add(sid)
                         pbar.update(1) 
 
-                        # update/save logs
-                        source_log_tbl = Table(source_rows)
-                        source_log_tbl.write(outdir / "rrfit_source_log.ecsv", 
-                                            format="ascii.ecsv", overwrite=True)
-                    
+                    # update/save logs  
                     job_log_tbl = Table(log_rows)
                     job_log_tbl.write(outdir / "rrfit_job_log.ecsv", 
                                     format="ascii.ecsv", overwrite=True)
+                    if source_rows:
+                        source_log_tbl = Table(source_rows)
+                        source_log_tbl.write(outdir / "rrfit_source_log.ecsv", 
+                                            format="ascii.ecsv", overwrite=True)
                         
     except KeyboardInterrupt:
         print("KeyboardInterrupt detected. Terminating active rrfit.e processes...")
