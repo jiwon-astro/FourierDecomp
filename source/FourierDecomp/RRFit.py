@@ -269,7 +269,7 @@ def build_rrfit_plan(sids, workdir, outdir, mode='gaia', ls_data=None, fitlc_lis
     outdir.mkdir(parents=True, exist_ok=True)
 
     tasks = []
-    for i, sid in enumerate(sids):
+    for i, sid in tqdm(enumerate(sids), total=len(sids), desc="Prepare .fitlc"):
         fitlc_path_i = None
         if isinstance(fitlc_list, (list, np.ndarray)):
             # assumming the same order
@@ -282,6 +282,7 @@ def build_rrfit_plan(sids, workdir, outdir, mode='gaia', ls_data=None, fitlc_lis
         if fitlc_path_i is None:
             if ls_data is None:
                 raise ValueError("Either fitlc_path or ls_data must be provided.")
+            
         # create .fitlc file under working directory
         source_lc = prepare_fitlc(sid, mode=mode,
                                   ls_data=ls_data, fitlc_path=fitlc_path_i, workdir=workdir) 
