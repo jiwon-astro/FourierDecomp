@@ -213,13 +213,19 @@ def _load_chunk(source_ids, phot_dir, mode="ogle",**kwargs):
 # -------------
 def _read_ident_gaia(query_fpath):
     query_fpath = Path(query_fpath)
-    fmt = 'ascii'+query_fpath.suffix
+    if query_fpath.suffix == '.dat': fmt = 'ascii.basic'
+    elif query_fpath.suffix == '.csv': fmt = 'ascii.csv'
+    elif query_fpath.suffix == '.ecsv': fmt = 'ascii.ecsv'
+    else: raise ValueError(f"unsupported formats: {query_fpath.suffix}")
     # load gaia query data
     return Table.read(query_fpath, format=fmt)
 
 def _read_match_table_ztf(match_fpath):
     match_fpath = Path(match_fpath)
-    fmt = 'ascii'+match_fpath.suffix
+    if match_fpath.suffix == '.dat': fmt = 'ascii.basic'
+    elif match_fpath.suffix == '.csv': fmt = 'ascii.csv'
+    elif match_fpath.suffix == '.ecsv': fmt = 'ascii.ecsv'
+    else: raise ValueError(f"unsupported formats: {match_fpath.suffix}")
     # Gaia-ZTF match
     return Table.read(match_fpath, format=fmt)
 
