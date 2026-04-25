@@ -446,7 +446,7 @@ def write_source_rrfit_results(outdir, sid, results, posfixs=""):
         rows.append(row)
 
     tbl = Table(rows) if rows else Table()
-    if not posfixs.startswith("_"): posfixs = "_" + posfixs
+    if posfixs and (not posfixs.startswith("_")): posfixs = "_" + posfixs
     summary_fname = outdir / f"rrfit{posfixs}_{sid}.summary"
     tbl.write(summary_fname, format='ascii.basic', overwrite=True)
     return summary_fname
@@ -464,7 +464,7 @@ def run_rrfit(sids, rrfit_exe, outdir, workdir=None, mode=None, fitlc_list=None,
         workdir = Path(rrfit_exe).parent / "temp"
     
     # build / load jobs
-    if not posfixs.startswith("_"): posfixs = "_" + posfixs
+    if posfixs and (not posfixs.startswith("_")): posfixs = "_" + posfixs
     plan_fpath = outdir / f"rrfit_plan{posfixs}.dat"
     if not plan_fpath.exists():
         plan_fpath = build_rrfit_plan(sids, workdir, outdir, mode=mode, 
@@ -488,7 +488,7 @@ def run_rrfit(sids, rrfit_exe, outdir, workdir=None, mode=None, fitlc_list=None,
 
     # run all jobs
     try:
-        with ProcessPoolExecutor(max_workers=max_workers) as ex:
+        with ThreadPoolExecutor(max_workers=max_workers) as ex:
             futs = {ex.submit(run_rrfit_job, job, rrfit_exe, workdir, is_test): job
                      for job in job_pool
                      }
@@ -540,6 +540,7 @@ def run_rrfit(sids, rrfit_exe, outdir, workdir=None, mode=None, fitlc_list=None,
                     source_log_tbl = Table(source_rows)
                     source_log_tbl.write(outdir / "rrfit_source_log.ecsv", 
                                          format="ascii.ecsv", overwrite=True)
+                    source_written.add(sid)
     
     except KeyboardInterrupt:
         kill_all_active_processes()
