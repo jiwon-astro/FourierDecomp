@@ -208,7 +208,7 @@ def period_fit_boundary_search(t, mag, emag, bands, n0 = 5, K = 5, Kw = 10,
     prom_alias = peak_prominences(Pw_flat, pidx_w)[0]
     pidx_w_sorted = pidx_w[np.argsort(prom_alias)][::-1] # sorting with respect to prominences 
     # Pw_alias = Pw[pidx_sorted][:Kw]
-    alias_freqs = freqs[pidx_w_sorted][:Kw]
+    alias_freqs = freqs[pidx_w_sorted][:Kw].tolist()
     
     # 4) calculate aliased periods
     P_alias = []
