@@ -165,7 +165,7 @@ def write_rrfit_inputs(job, workdir):
         f.write("SOURCE_ID P_LS p0flag\n")
         f.write(f"{job.sid} {job.P0:.10f} {job.p0flag}\n")
 
-def build_rrfit_jobs(sid, workdir, mode='gaia', ls_data=None, fitlc_path=None,
+def build_rrfit_jobs(source_lc, workdir, mode='gaia',
                      bandpairs=(("g","bp"),("g","rp")),
                      A_bounds=(0.05, 3.0), p_bounds=None,
                      n0=5, K=5, Kw=10, snr_LS=3., snr_window=5.,harmonics=2,
@@ -176,10 +176,9 @@ def build_rrfit_jobs(sid, workdir, mode='gaia', ls_data=None, fitlc_path=None,
     workdir: working directory (for .fitlc, job, meta, and other temporary files)
 
     For a given source,
-    1) make .fitlc
-    2) LS/window-alias-based logP boundaries
-    3) RRFitJob list + metadata
-    4) export .json/.ecsv files(optional)
+    1) LS/window-alias-based logP boundaries
+    2) RRFitJob list + metadata
+    3) export .json/.ecsv files(optional)
     """
     from . import params
 
@@ -190,12 +189,7 @@ def build_rrfit_jobs(sid, workdir, mode='gaia', ls_data=None, fitlc_path=None,
     filters = cfg.filters
 
     # fitlc path 준비
-    if fitlc_path is None:
-        if ls_data is None:
-            raise ValueError("Either fitlc_path or ls_data must be provided.")
-    # create .fitlc file under working directory
-    source_lc = prepare_fitlc(sid, mode=mode,
-                                ls_data=ls_data, fitlc_path=fitlc_path, workdir=workdir) 
+    sid = source_lc.sid
     fitlc_path = source_lc.fitlc_path
 
     # Lomb-Scargle / Window-alias period window
@@ -284,9 +278,15 @@ def build_rrfit_plan(sids, workdir, outdir, mode='gaia', ls_data=None, fitlc_lis
             fitlc_path_i = fitlc_list[i]
         elif isinstance(fitlc_list, dict):
             fitlc_path_i = fitlc_list.get(sid, None)
-        
-        tasks.append({"sid": sid, "workdir": workdir, "mode": mode,
-                      "ls_data": ls_data, "fitlc_path": fitlc_path_i, "bandpairs": bandpairs,
+
+        if fitlc_path_i is None:
+            if ls_data is None:
+                raise ValueError("Either fitlc_path or ls_data must be provided.")
+        # create .fitlc file under working directory
+        source_lc = prepare_fitlc(sid, mode=mode,
+                                  ls_data=ls_data, fitlc_path=fitlc_path_i, workdir=workdir) 
+            
+        tasks.append({"source_lc": source_lc, "workdir": workdir, "mode": mode, "bandpairs": bandpairs,
                       "overwrite": overwrite, "save":True, "posfixs":posfixs, **kwargs})
     
     rows = []
