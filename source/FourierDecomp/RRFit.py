@@ -279,9 +279,6 @@ def build_rrfit_plan_pool(sids, outdir, mode='gaia', bandpairs=(("g","bp"),("g",
     outdir = Path(outdir)
     outdir.mkdir(parents=True, exist_ok=True)
 
-    def _worker(kwargs):
-        return build_rrfit_plan(**kwargs)
-
     tasks = []
     for i, sid in enumerate(sids):
         fitlc_path_i = None
@@ -299,7 +296,7 @@ def build_rrfit_plan_pool(sids, outdir, mode='gaia', bandpairs=(("g","bp"),("g",
     
     rows = []
     with ProcessPoolExecutor(max_workers=max_workers) as ex:
-        futs = [ex.submit(_worker, t) for t in tasks]
+        futs = [ex.submit(build_rrfit_plan, **t) for t in tasks]
         for fut in tqdm(futs, total=len(futs), desc="Constructing RRFit jobs"):
             rows.append(fut.result())
 
