@@ -297,7 +297,7 @@ def build_rrfit_plan(sids, workdir, outdir, mode='gaia', ls_data=None, fitlc_lis
             rows.append(fut.result())
 
     tbl = Table(rows)
-    if not posfixs.startswith("_"): posfixs = "_" + posfixs
+    if posfixs and (not posfixs.startswith("_")): posfixs = "_" + posfixs
     plan_fpath = outdir / f"rrfit_plan{posfixs}.dat"
     tbl.write(plan_fpath, format="ascii.basic", overwrite=True)
     return plan_fpath
