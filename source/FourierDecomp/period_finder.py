@@ -11,6 +11,10 @@ from .params import pmin, pmax, n0, delta_P_tol
 from .IO import get_data_config
 
 from scipy.ndimage import median_filter
+
+import warnings
+warnings.filterwarnings('ignore')
+
 # ==================================
 fmin = 1/pmax # expected minimum frequency [days^-1] (<100d)
 fmax = 1/pmin # expected maximum frequency [days^-1](anomalous cepheids - 0.4d)
