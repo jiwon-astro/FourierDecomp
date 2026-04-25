@@ -1,13 +1,11 @@
 import os
 import signal
 import numpy as np
-import matplotlib.pyplot as plt
-import pandas as pd
 from pathlib import Path
 from dataclasses import dataclass
 from typing import Union
 from tqdm.notebook import tqdm
-from astropy.table import Table, vstack, unique, join
+from astropy.table import Table
 
 import pickle
 import tempfile
@@ -401,8 +399,14 @@ def run_rrfit_job(job, rrfit_exe, base_workdir=None, is_test=False,
                                 start_new_session=True, # process group separation
                                 ) 
             _register_proc(job.job_id, proc)
-            stdout, stderr = proc.communicate(timeout=timeout) # waiting for child process to finish
-            returncode = proc.returncode
+            try:
+                stdout, stderr = proc.communicate(timeout=timeout) # waiting for child process to finish
+                returncode = proc.returncode
+            except subprocess.TimeoutExpired:
+                os.killpg(proc.pid, signal.SIGKILL)
+                stdout, stderr = proc.communicate()
+                stderr = (stderr or "") + f"\n[TIMEOUT] exceeded {timeout} sec"
+                returncode = -9
         finally:
             _unregister_proc(job.job_id)
 
