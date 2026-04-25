@@ -9,7 +9,7 @@ from typing import Union
 from tqdm.notebook import tqdm
 from astropy.table import Table, vstack, unique, join
 
-import json
+import pickle
 import tempfile
 import subprocess
 import threading
@@ -238,14 +238,14 @@ def build_rrfit_jobs(source_lc, workdir, mode='gaia',
 
     if save:
         if not posfixs.startswith("_"): posfixs = "_" + posfixs
-        job_fpath = workdir / f"rrfit_jobs{posfixs}_{sid}.json"
+        job_fpath = workdir / f"rrfit_jobs{posfixs}_{sid}.pkl"
         meta_fpath = workdir / f"rrfit_meta{posfixs}_{sid}.ecsv"
         # job file
         if overwrite or (not job_fpath.exists()):
-            with open(job_fpath, "w", encoding="utf-8") as f:
-                json.dump({"sid": str(sid), "n_jobs": len(jobs),
-                        "jobs": [rrfit_job_to_dict(j) for j in jobs]}, f, indent=2, 
-                        ensure_ascii=False)
+            payload = {"sid": str(sid), "n_jobs": len(jobs),
+                       "jobs": [rrfit_job_to_dict(j) for j in jobs]}
+            with open(job_fpath, "wb") as f:
+                pickle.dump(payload, f, protocol=pickle.HIGHEST_PROTOCOL)
         # meta file
         meta_tbl = Table({key:[val] for key, val in meta.items()}) 
         meta_tbl.write(meta_fpath, format="ascii.ecsv", overwrite=True)
@@ -328,8 +328,8 @@ def load_rrfit_plan(plan_fpath, sids=None):
         job_fpath, meta_fpath = Path(job_fpath), Path(meta_fpath)
         #job file
         if not job_fpath.exists(): continue
-        with open(job_fpath, "r", encoding="utf-8") as f:
-            payload = json.load(f)
+        with open(job_fpath, "rb") as f:
+            payload = pickle.load(f)
 
         jobs = [rrfit_job_from_dict(d) for d in payload.get("jobs", [])]
         job_pool.extend(jobs)
