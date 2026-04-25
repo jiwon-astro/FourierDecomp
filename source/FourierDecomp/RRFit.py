@@ -243,7 +243,7 @@ def build_rrfit_jobs(source_lc, workdir, mode='gaia',
         # job file
         if overwrite or (not job_fpath.exists()):
             with open(job_fpath, "w", encoding="utf-8") as f:
-                json.dump({"sid": sid, "n_jobs": len(jobs),
+                json.dump({"sid": str(sid), "n_jobs": len(jobs),
                         "jobs": [rrfit_job_to_dict(j) for j in jobs]}, f, indent=2, 
                         ensure_ascii=False)
         # meta file
@@ -251,7 +251,7 @@ def build_rrfit_jobs(source_lc, workdir, mode='gaia',
         meta_tbl.write(meta_fpath, format="ascii.ecsv", overwrite=True)
 
         # return file path only
-        return {"sid": sid, "job_file": str(job_fpath), "meta_file": str(meta_fpath), "n_jobs": len(jobs)}
+        return {"sid": str(sid), "job_file": str(job_fpath), "meta_file": str(meta_fpath), "n_jobs": len(jobs)}
     
     return jobs, meta
 
