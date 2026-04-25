@@ -492,56 +492,60 @@ def run_rrfit(sids, rrfit_exe, outdir, workdir=None, mode=None, fitlc_list=None,
             futs = {ex.submit(run_rrfit_job, job, rrfit_exe, workdir, is_test): job
                      for job in job_pool
                      }
-            for fut, job in tqdm(as_completed(futs.items()), total=len(futs), desc='Run RRFit'): 
-                sid = job.sid
-                r = fut.result()
-                results_pool[sid].append(r)
-                n_done_pool[sid] += 1
+            with tqdm(total=len(sids), desc='Run RRFit') as pbar:
+                for fut, job in tqdm(as_completed(futs.items()), 
+                                     total=len(futs), desc='Run RRFit'): 
+                    sid = job.sid
+                    r = fut.result()
+                    results_pool[sid].append(r)
+                    n_done_pool[sid] += 1
 
-                # log
-                log_rows.append({
-                    "sid": r["sid"],
-                    "job_id": r["job_id"],
-                    "window_idx": r["window_idx"],
-                    "bandpair": r["bandpair"],
-                    "P0": r["P0"],
-                    "pmin": r["pmin"],
-                    "pmax": r["pmax"],
-                    "p0flag": r["p0flag"],
-                    "returncode": r["returncode"],
-                    "result_ok": r["result"] is not None,
-                    "stderr": r["stderr"][:500] if isinstance(r["stderr"], str) else "",
-                })
-
-                # If all jobs have finished for a given source
-                if (sid not in source_written) and (n_done_pool[sid]>=n_total_pool[sid]):
-                    # Collect results from the separate jobs of a given source
-                    meta = meta_pool[sid]
-                    results = results_pool.get(sid,[]) 
-                     # Write result to summary/meta files
-                    summary_fpath = write_source_rrfit_results(outdir, sid, results, posfixs=posfixs)
-                    n_success = sum(int(r["returncode"] == 0 and r["result"] is not None) 
-                                    for r in results
-                                    )
-                    
-                    source_rows.append({
-                        "sid": sid,
-                        "n_jobs_total": meta["n_jobs"],
-                        "n_jobs_finished": len(results),
-                        "n_jobs_success": n_success,
-                        "summary": str(summary_fpath)
+                    # log
+                    log_rows.append({
+                        "sid": r["sid"],
+                        "job_id": r["job_id"],
+                        "window_idx": r["window_idx"],
+                        "bandpair": r["bandpair"],
+                        "P0": r["P0"],
+                        "pmin": r["pmin"],
+                        "pmax": r["pmax"],
+                        "p0flag": r["p0flag"],
+                        "returncode": r["returncode"],
+                        "result_ok": r["result"] is not None,
+                        "stderr": r["stderr"][:500] if isinstance(r["stderr"], str) else "",
                     })
 
-                    # 4) update/save logs
+                    # If all jobs have finished for a given source
+                    if (sid not in source_written) and (n_done_pool[sid]>=n_total_pool[sid]):
+                        # Collect results from the separate jobs of a given source
+                        meta = meta_pool[sid]
+                        results = results_pool.get(sid,[]) 
+                        # Write result to summary/meta files
+                        summary_fpath = write_source_rrfit_results(outdir, sid, results, 
+                                                                   posfixs=posfixs)
+                        n_success = sum(int(r["returncode"] == 0 and r["result"] is not None) 
+                                        for r in results
+                                        )
+                        
+                        source_rows.append({
+                            "sid": sid,
+                            "n_jobs_total": meta["n_jobs"],
+                            "n_jobs_finished": len(results),
+                            "n_jobs_success": n_success,
+                            "summary": str(summary_fpath)
+                        })
+                        source_written.add(sid)
+                        pbar.update(1) 
+
+                        # update/save logs
+                        source_log_tbl = Table(source_rows)
+                        source_log_tbl.write(outdir / "rrfit_source_log.ecsv", 
+                                            format="ascii.ecsv", overwrite=True)
+                    
                     job_log_tbl = Table(log_rows)
                     job_log_tbl.write(outdir / "rrfit_job_log.ecsv", 
-                                      format="ascii.ecsv", overwrite=True)
-
-                    source_log_tbl = Table(source_rows)
-                    source_log_tbl.write(outdir / "rrfit_source_log.ecsv", 
-                                         format="ascii.ecsv", overwrite=True)
-                    source_written.add(sid)
-    
+                                    format="ascii.ecsv", overwrite=True)
+                        
     except KeyboardInterrupt:
         print("KeyboardInterrupt detected. Terminating active rrfit.e processes...")
         kill_all_active_processes()
