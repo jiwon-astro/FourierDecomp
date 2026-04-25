@@ -222,10 +222,11 @@ def build_rrfit_jobs(sid, mode='gaia', bandpairs=(("g","bp"),("g","rp")),
     return P0_LS, Zmax, jobs, alias_freqs, logP_bounds
 
 def build_rrfit_plan(sid, outdir, mode='gaia', bandpairs=(("g","bp"),("g","rp")),
-                     ls_data=None, fitlc_path=None, workdir=None, overwrite=True, **kwargs
+                     ls_data=None, fitlc_path=None, workdir=None, 
+                     overwrite=True, return_summary=True, **kwargs
                     ):
     """
-    for each source,
+    for a given source,
     - build_rrfit_jobs()
     - save jobs (.json) & meta (.ecsv)
     """
@@ -262,14 +263,13 @@ def build_rrfit_plan(sid, outdir, mode='gaia', bandpairs=(("g","bp"),("g","rp"))
     })
     meta_tbl.write(meta_fpath, format="ascii.ecsv", overwrite=True)
 
-    return {
-        "sid": sid,
-        "job_file": str(job_fpath),
-        "meta_file": str(meta_fpath),
-        "n_jobs": len(jobs_dict),
-    }
+    if return_summary:
+        return {"sid": sid, "job_file": str(job_fpath), "meta_file": str(meta_fpath),
+                "n_jobs": len(jobs_dict)}
+    else:
+        return jobs, meta_tbl
 
-def build_rrfit_plan(sids, outdir, mode='gaia', bandpairs=(("g","bp"),("g","rp")),
+def build_rrfit_plan_pool(sids, outdir, mode='gaia', bandpairs=(("g","bp"),("g","rp")),
                      ls_data=None, fitlc_list=None, workdir=None, 
                      max_workers=8, overwrite=True, **kwargs
                     ):
@@ -295,12 +295,12 @@ def build_rrfit_plan(sids, outdir, mode='gaia', bandpairs=(("g","bp"),("g","rp")
         
         tasks.append({"sid": sid, "outdir": outdir, "mode": mode, "bandpairs": bandpairs,
                         "ls_data": ls_data, "fitlc_path": fitlc_path_i, "workdir": workdir,
-                        "overwrite": overwrite, **kwargs})
+                        "overwrite": overwrite, "return_summary":True, **kwargs})
     
     rows = []
     with ProcessPoolExecutor(max_workers=max_workers) as ex:
         futs = [ex.submit(_worker, t) for t in tasks]
-        for fut in futs:
+        for fut in tqdm(futs, total=len(futs), desc="Constructing RRFit jobs"):
             rows.append(fut.result())
 
     tbl = Table(rows)
@@ -476,12 +476,8 @@ def run_rrfit(sids, rrfit_exe, outdir, mode=None, fitlc_list=None, ls_data=None,
     # build / load jobs
     if plan_dir is not None:
         job_pool, meta_pool = load_rrfit_plan(plan_dir, sids=sids)
-    else:
-        job_pool, meta_pool = build_rrfit_job_pool(
-            sids=sids, mode=mode, bandpairs=bandpairs,
-            ls_data=ls_data, fitlc_list=fitlc_list,
-            workdir=workdir, outdir=outdir, **kwargs
-        )
+    if not (job_pool and meta_pool):
+        raise ValueError("Not Valid Job data list and Meta data list")
 
     # track source-wise job status
     results_pool = defaultdict(list)
@@ -498,7 +494,7 @@ def run_rrfit(sids, rrfit_exe, outdir, mode=None, fitlc_list=None, ls_data=None,
             futs = {ex.submit(run_rrfit_job, job, rrfit_exe, workdir, is_test): job
                      for job in job_pool
                      }
-            for fut, job in futs.item(): 
+            for fut, job in tqdm(futs.item(), total=len(futs), desc='Run RRFit'): 
                 sid = job.sid
                 r = fut.result()
                 results_pool[sid].append(r)
@@ -525,10 +521,7 @@ def run_rrfit(sids, rrfit_exe, outdir, mode=None, fitlc_list=None, ls_data=None,
                     meta = meta_pool[sid]
                     results = results_pool.get(sid,[]) 
                      #write result to summary/meta file
-                    summary_fpath, meta_fpath = write_source_rrfit_results(outdir, sid, results, 
-                                                        P0_LS=meta['P0_LS'], Zmax=meta['Zmax'], 
-                                                        logP_bounds=meta['logP_bounds'], 
-                                                        alias_freqs=meta['alias_freqs'])
+                    summary_fpath = write_source_rrfit_results(outdir, sid, results)
                     n_success = sum(int(r["returncode"] == 0 and r["result"] is not None) 
                                     for r in results
                                     )
@@ -538,8 +531,7 @@ def run_rrfit(sids, rrfit_exe, outdir, mode=None, fitlc_list=None, ls_data=None,
                         "n_jobs_total": meta["n_jobs"],
                         "n_jobs_finished": len(results),
                         "n_jobs_success": n_success,
-                        "summary": str(summary_fpath),
-                        "meta": str(meta_fpath),
+                        "summary": str(summary_fpath)
                     })
 
                     # 4) update/save logs
