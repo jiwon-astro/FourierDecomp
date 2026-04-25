@@ -490,11 +490,9 @@ def run_rrfit(sids, rrfit_exe, outdir, workdir=None, mode=None, fitlc_list=None,
     try:
         with ThreadPoolExecutor(max_workers=max_workers) as ex:
             futs = {ex.submit(run_rrfit_job, job, rrfit_exe, workdir, is_test): job
-                     for job in job_pool
-                     }
+                     for job in job_pool}
             with tqdm(total=len(sids), desc='Run RRFit') as pbar:
-                for fut, job in tqdm(as_completed(futs.items()), 
-                                     total=len(futs), desc='Run RRFit'): 
+                for fut, job in as_completed(futs.items()): 
                     sid = job.sid
                     r = fut.result()
                     results_pool[sid].append(r)
