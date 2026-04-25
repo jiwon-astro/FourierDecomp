@@ -212,14 +212,16 @@ def _load_chunk(source_ids, phot_dir, mode="ogle",**kwargs):
 # identifiers
 # -------------
 def _read_ident_gaia(query_fpath):
+    query_fpath = Path(query_fpath)
+    fmt = 'ascii'+query_fpath.suffix
     # load gaia query data
-    tab = Table.read(query_fpath, format='ascii.ecsv')
-    return tab
+    return Table.read(query_fpath, format=fmt)
 
 def _read_match_table_ztf(match_fpath):
-    # Gaia-ZTF match
     match_fpath = Path(match_fpath)
-    return Table.read(match_fpath, format="ascii.ecsv")
+    fmt = 'ascii'+match_fpath.suffix
+    # Gaia-ZTF match
+    return Table.read(match_fpath, format=fmt)
 
 def _read_ident_ogle(ident_fpath_list):
     cat = []
