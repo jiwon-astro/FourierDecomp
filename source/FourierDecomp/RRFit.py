@@ -456,7 +456,7 @@ def write_source_rrfit_results(outdir, sid, results, posfixs=""):
 # ================================
 def run_rrfit(sids, rrfit_exe, outdir, workdir=None, mode=None, fitlc_list=None, ls_data=None, 
               bandpairs=(("g", "bp"), ("g", "rp")), max_workers=8, is_test=False, 
-              posfixs=None, **kwargs):
+              posfixs="", **kwargs):
     
     outdir = Path(outdir)
     outdir.mkdir(parents=True, exist_ok=True)
@@ -464,7 +464,7 @@ def run_rrfit(sids, rrfit_exe, outdir, workdir=None, mode=None, fitlc_list=None,
         workdir = Path(rrfit_exe).parent / "temp"
     
     # build / load jobs
-    if (posfixs is not None) and (posfixs[0] != "_"): posfixs = "_" + posfixs
+    if not posfixs.startswith("_"): posfixs = "_" + posfixs
     plan_fpath = outdir / f"rrfit_plan{posfixs}.dat"
     if not plan_fpath.exists():
         plan_fpath = build_rrfit_plan(sids, workdir, outdir, mode=mode, 
