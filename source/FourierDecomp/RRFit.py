@@ -165,22 +165,40 @@ def write_rrfit_inputs(job, workdir):
         f.write("SOURCE_ID P_LS p0flag\n")
         f.write(f"{job.sid} {job.P0:.10f} {job.p0flag}\n")
 
-def build_rrfit_jobs(sid, mode='gaia', bandpairs=(("g","bp"),("g","rp")),
-                     ls_data=None, fitlc_path=None, workdir=None,
+def build_rrfit_jobs(sid, workdir, mode='gaia', ls_data=None, fitlc_path=None,
+                     bandpairs=(("g","bp"),("g","rp")),
                      A_bounds=(0.05, 3.0), p_bounds=None,
                      n0=5, K=5, Kw=10, snr_LS=3., snr_window=5.,harmonics=2,
-                     logP_tol=0.1, max_width=1.0, tmpl_start=1, tmpl_end=25):
-    
+                     logP_tol=0.1, max_width=1.0, tmpl_start=1, tmpl_end=25,
+                     overwrite=True, save=True, posfixs=""
+):
+    """
+    workdir: working directory (.fitlc, job, meta, and other temporal files)
+
+    for a given source,
+    1) make .fitlc
+    2) LS/window-alias base logP boundary
+    3) RRFitJob list + metadata
+    4) export json/ecsv (optional)
+    """
     from . import params
-    
+
+    workdir = Path(workdir)
+    workdir.mkdir(parents=True, exist_ok=True)
+
     cfg = get_data_config(mode)
     filters = cfg.filters
-    
-    # source_lc: RRFitLC
-    source_lc = prepare_fitlc(sid, mode=mode, ls_data=ls_data, 
-                              fitlc_path=fitlc_path, workdir=workdir)
+
+    # fitlc path 준비
+    if fitlc_path is None:
+        if ls_data is None:
+            raise ValueError("Either fitlc_path or ls_data must be provided.")
+    # create .fitlc file under working directory
+    source_lc = prepare_fitlc(sid, mode=mode,
+                                ls_data=ls_data, fitlc_path=fitlc_path, workdir=workdir) 
     fitlc_path = source_lc.fitlc_path
-    
+
+    # Lomb-Scargle / Window-alias period window
     P0_LS, Zmax = np.nan, np.nan
     if p_bounds is None:
         # boundary search
@@ -191,14 +209,14 @@ def build_rrfit_jobs(sid, mode='gaia', bandpairs=(("g","bp"),("g","rp")),
         )
         pidx = np.argmax(Z_LS)
         P0_LS, Zmax = P_LS[pidx], Z_LS[pidx] # best LS period
-    elif isinstance(p_bounds,(list, tuple)) and len(p_bounds)==1:
+    elif isinstance(p_bounds,(list, tuple)) and len(p_bounds)==2:
         logP_bounds = [(np.log10(p_bounds[0]), np.log10(p_bounds[1]))] # ensure dimension
     else:
         raise ValueError("unsupported p_bounds types")
     
     jobs = []
-    logP_bounds = [(np.log10(params.pmin), np.log10(params.pmax))] + logP_bounds # global period scan
-    for iw, logP_bound in enumerate(logP_bounds):
+    logP_bounds_full = [(np.log10(params.pmin), np.log10(params.pmax))] + logP_bounds # global period scan
+    for iw, logP_bound in enumerate(logP_bounds_full):
         logP0 = np.mean(logP_bound)
         P0 = 10**logP0
         pmin = max(params.pmin, 10**(logP_bound[0]-logP_tol)) # add padding
@@ -212,70 +230,46 @@ def build_rrfit_jobs(sid, mode='gaia', bandpairs=(("g","bp"),("g","rp")),
         for bp in bandpairs:
             jobs.append(RRFitJob(sid=sid,
                                  fitlc_path=fitlc_path,
-                                 filters=filters,
-                                 selected_bands=bp,
+                                 filters=filters, selected_bands=bp,
                                  P0=P0, p0flag=p0flag,
                                  window_idx=iw, pmin=pmin, pmax=pmax,
                                  tmpl_start=tmpl_start, tmpl_end=tmpl_end,
                                  Amin=A_bounds[0], Amax=A_bounds[1])
                        )
-    return P0_LS, Zmax, jobs, alias_freqs, logP_bounds
+    # meta data
+    meta = {"sid": sid, "P0_LS": P0_LS, "Zmax": Zmax, 
+            "alias_freqs": list(alias_freqs), "logP_bounds": logP_bounds_full,
+            "n_jobs": len(jobs)}
 
-def build_rrfit_plan(sid, outdir, mode='gaia', bandpairs=(("g","bp"),("g","rp")),
-                     ls_data=None, fitlc_path=None, workdir=None, 
-                     overwrite=True, return_summary=True, **kwargs
-                    ):
-    """
-    for a given source,
-    - build_rrfit_jobs()
-    - save jobs (.json) & meta (.ecsv)
-    """
-    outdir = Path(outdir)
-    outdir.mkdir(parents=True, exist_ok=True)
+    if save:
+        if posfixs: posfixs = "_" + posfixs
+        job_fpath = workdir / f"rrfit_jobs{posfixs}_{sid}.json"
+        meta_fpath = workdir / f"rrfit_meta{posfixs}_{sid}.ecsv"
+        # job file
+        if overwrite or (not job_fpath.exists()):
+            with open(job_fpath, "w", encoding="utf-8") as f:
+                json.dump({"sid": sid, "n_jobs": len(jobs),
+                        "jobs": [rrfit_job_to_dict(j) for j in jobs]}, f, indent=2, 
+                        ensure_ascii=False)
+        # meta file
+        meta_tbl = Table({key:[val] for key, val in meta.items()}) 
+        meta_tbl.write(meta_fpath, format="ascii.ecsv", overwrite=True)
 
-    P0_LS, Zmax, jobs, alias_freqs, logP_bounds = build_rrfit_jobs(
-        sid=sid,
-        mode=mode,
-        bandpairs=bandpairs,
-        ls_data=ls_data,
-        fitlc_path=fitlc_path,
-        workdir=workdir,
-        **kwargs,
-    )
+        # return file path only
+        return {"sid": sid, "job_file": str(job_fpath), "meta_file": str(meta_fpath), "n_jobs": len(jobs)}
+    
+    return jobs, meta
 
-    jobs_dict = [rrfit_job_to_dict(job) for job in jobs]
-
-    job_fpath = outdir / f"rrfit_jobs_{sid}.json"
-    meta_fpath = outdir / f"rrfit_LS_{sid}.ecsv"
-
-    if overwrite or (not job_fpath.exists()):
-        with open(job_fpath, "w", encoding="utf-8") as f:
-            json.dump({"sid": sid, "n_jobs": len(jobs_dict), "jobs": jobs_dict}, f, 
-                      indent=2, ensure_ascii=False)
-
-    meta_tbl = Table({
-        "sid": [sid],
-        "P0_LS": [P0_LS],
-        "Zmax": [Zmax],
-        "alias_freqs": [alias_freqs],
-        "logP_bounds": [logP_bounds],
-        "n_jobs": [len(jobs_dict)],
-    })
-    meta_tbl.write(meta_fpath, format="ascii.ecsv", overwrite=True)
-
-    if return_summary:
-        return {"sid": sid, "job_file": str(job_fpath), "meta_file": str(meta_fpath),
-                "n_jobs": len(jobs_dict)}
-    else:
-        return jobs, meta_tbl
-
-def build_rrfit_plan_pool(sids, outdir, mode='gaia', bandpairs=(("g","bp"),("g","rp")),
-                     ls_data=None, fitlc_list=None, workdir=None, 
-                     max_workers=8, overwrite=True, **kwargs
-                    ):
+def build_rrfit_plan(sids, workdir, outdir, mode='gaia', ls_data=None, fitlc_list=None,
+                          bandpairs=(("g","bp"),("g","rp")), max_workers=8, 
+                          overwrite=True, posfixs="", **kwargs):
     """
     Create RRFitJob and Lomb-Scargle metadata for all sources
+    - multiprocessing
+    - workdir: rrfit_jobs_<sid>.json / rrfit_meta_<sid>.ecsv
+    - outdir: rrfit_plan.ecsv (summary)
     """
+    workdir = Path(workdir)
     outdir = Path(outdir)
     outdir.mkdir(parents=True, exist_ok=True)
 
@@ -290,44 +284,56 @@ def build_rrfit_plan_pool(sids, outdir, mode='gaia', bandpairs=(("g","bp"),("g",
         elif isinstance(fitlc_list, dict):
             fitlc_path_i = fitlc_list.get(sid, None)
         
-        tasks.append({"sid": sid, "outdir": outdir, "mode": mode, "bandpairs": bandpairs,
-                        "ls_data": ls_data, "fitlc_path": fitlc_path_i, "workdir": workdir,
-                        "overwrite": overwrite, "return_summary":True, **kwargs})
+        tasks.append({"sid": sid, "workdir": workdir, "mode": mode,
+                      "ls_data": ls_data, "fitlc_path": fitlc_path_i, "bandpairs": bandpairs,
+                      "overwrite": overwrite, "save":True, "posfixs":posfixs, **kwargs})
     
     rows = []
     with ProcessPoolExecutor(max_workers=max_workers) as ex:
-        futs = [ex.submit(build_rrfit_plan, **t) for t in tasks]
+        futs = [ex.submit(build_rrfit_jobs, **t) for t in tasks]
         for fut in tqdm(futs, total=len(futs), desc="Constructing RRFit jobs"):
             rows.append(fut.result())
 
     tbl = Table(rows)
-    tbl.write(outdir / "rrfit_plan.ecsv", format="ascii.ecsv", overwrite=True)
+    if posfixs: posfixs = "_" + posfixs
+    tbl.write(outdir / f"rrfit_plan{posfixs}.dat", format="ascii.basic", overwrite=True)
     return tbl
 
-def load_rrfit_plan(outdir, sids=None):
+def load_rrfit_plan(outdir, sids=None, posfixs=""):
     """
     create job_pool, meta_pool from reading rrfit_jobs_<sid>.json / rrfit_meta_<sid>.ecsv files
     """
     outdir = Path(outdir)
-    if sids is None:
-        job_files = sorted(outdir.glob("rrfit_jobs_*.json"))
-    else:
-        job_files = [outdir / f"rrfit_jobs_{sid}.json" for sid in sids]
+    if posfixs: posfixs = "_" + posfixs
+    plan_fpath = outdir / f"rrfit_plan{posfixs}.dat"
+    plan_tbl = Table.read(plan_fpath, format="ascii")
+
+    sids_full = plan_tbl['sid'].value
+    job_files_full = plan_tbl['job_file'].value
+    meta_files_full = plan_tbl['meta_file'].value
+    
+    if sids is not None: 
+        sid_mask = np.isin(sids_full, sids)
+        job_files = job_files_full[sid_mask]
+        meta_files = meta_files_full[sid_mask]
+    else: 
+        sids = sids_full
+        job_files = job_files_full
+        meta_files = meta_files_full
 
     job_pool = []
     meta_pool = {}
 
-    for job_fpath in job_files:
+    for sid, job_fpath, meta_fpath in zip(sids, job_files, meta_files):
+        #job file
         if not job_fpath.exists(): continue
-        sid = job_fpath.stem.replace("rrfit_jobs_", "")
-
         with open(job_fpath, "r", encoding="utf-8") as f:
             payload = json.load(f)
 
         jobs = [rrfit_job_from_dict(d) for d in payload.get("jobs", [])]
         job_pool.extend(jobs)
 
-        meta_fpath = outdir / f"rrfit_meta_{sid}.ecsv"
+        # meta file
         if meta_fpath.exists():
             meta_tbl = Table.read(meta_fpath, format="ascii.ecsv")
             if meta_tbl:
@@ -616,4 +622,110 @@ def run_rrfit_single(sid, rrfit_exe, outdir,
     return {"sid": sid, 
             "n_jobs": len(jobs), 
             "summary": str(summary_fpath)}
+
+def build_rrfit_jobs(sid, mode='gaia', bandpairs=(("g","bp"),("g","rp")),
+                     ls_data=None, fitlc_path=None, workdir=None,
+                     A_bounds=(0.05, 3.0), p_bounds=None,
+                     n0=5, K=5, Kw=10, snr_LS=3., snr_window=5.,harmonics=2,
+                     logP_tol=0.1, max_width=1.0, tmpl_start=1, tmpl_end=25):
+    
+    from . import params
+    
+    cfg = get_data_config(mode)
+    filters = cfg.filters
+    
+    # source_lc: RRFitLC
+    source_lc = prepare_fitlc(sid, mode=mode, ls_data=ls_data, 
+                              fitlc_path=fitlc_path, workdir=workdir)
+    fitlc_path = source_lc.fitlc_path
+    
+    P0_LS, Zmax = np.nan, np.nan
+    if p_bounds is None:
+        # boundary search
+        P_LS, Z_LS, alias_freqs, logP_bounds = period_fit_boundary_search(
+            source_lc.t, source_lc.mag, source_lc.emag, source_lc.bands, 
+            n0=n0, K=K, Kw=Kw, snr_LS=snr_LS, snr_window=snr_window, 
+            harmonics=harmonics, logP_tol=logP_tol, max_width=max_width
+        )
+        pidx = np.argmax(Z_LS)
+        P0_LS, Zmax = P_LS[pidx], Z_LS[pidx] # best LS period
+    elif isinstance(p_bounds,(list, tuple)) and len(p_bounds)==1:
+        logP_bounds = [(np.log10(p_bounds[0]), np.log10(p_bounds[1]))] # ensure dimension
+    else:
+        raise ValueError("unsupported p_bounds types")
+    
+    jobs = []
+    logP_bounds = [(np.log10(params.pmin), np.log10(params.pmax))] + logP_bounds # global period scan
+    for iw, logP_bound in enumerate(logP_bounds):
+        logP0 = np.mean(logP_bound)
+        P0 = 10**logP0
+        pmin = max(params.pmin, 10**(logP_bound[0]-logP_tol)) # add padding
+        pmax = min(params.pmax, 10**(logP_bound[1]+logP_tol))
+        if pmin > pmax: continue
+        
+        # previous definition of p0flag: relative offset from P_Gaia
+        # calculate p0flag by comparing the LS best period and representative value of given period range
+        p0flag = 0 if abs(logP0 - np.log10(P0_LS)) < min(0.05, logP_tol) else 1
+        
+        for bp in bandpairs:
+            jobs.append(RRFitJob(sid=sid,
+                                 fitlc_path=fitlc_path,
+                                 filters=filters,
+                                 selected_bands=bp,
+                                 P0=P0, p0flag=p0flag,
+                                 window_idx=iw, pmin=pmin, pmax=pmax,
+                                 tmpl_start=tmpl_start, tmpl_end=tmpl_end,
+                                 Amin=A_bounds[0], Amax=A_bounds[1])
+                       )
+    return P0_LS, Zmax, jobs, alias_freqs, logP_bounds
+
+def build_rrfit_plan(sid, outdir, mode='gaia', bandpairs=(("g","bp"),("g","rp")),
+                     ls_data=None, fitlc_path=None, workdir=None, 
+                     overwrite=True, return_summary=True, **kwargs
+                    ):
+
+    for a given source,
+    - build_rrfit_jobs()
+    - save jobs (.json) & meta (.ecsv)
+
+    outdir = Path(outdir)
+    outdir.mkdir(parents=True, exist_ok=True)
+
+    P0_LS, Zmax, jobs, alias_freqs, logP_bounds = build_rrfit_jobs(
+        sid=sid,
+        mode=mode,
+        bandpairs=bandpairs,
+        ls_data=ls_data,
+        fitlc_path=fitlc_path,
+        workdir=workdir,
+        **kwargs,
+    )
+
+    jobs_dict = [rrfit_job_to_dict(job) for job in jobs]
+
+    job_fpath = outdir / f"rrfit_jobs_{sid}.json"
+    meta_fpath = outdir / f"rrfit_LS_{sid}.ecsv"
+
+    if overwrite or (not job_fpath.exists()):
+        with open(job_fpath, "w", encoding="utf-8") as f:
+            json.dump({"sid": sid, "n_jobs": len(jobs_dict), "jobs": jobs_dict}, f, 
+                      indent=2, ensure_ascii=False)
+
+    meta_tbl = Table({
+        "sid": [sid],
+        "P0_LS": [P0_LS],
+        "Zmax": [Zmax],
+        "alias_freqs": [alias_freqs],
+        "logP_bounds": [logP_bounds],
+        "n_jobs": [len(jobs_dict)],
+    })
+    meta_tbl.write(meta_fpath, format="ascii.ecsv", overwrite=True)
+
+    if return_summary:
+        return {"sid": sid, "job_file": str(job_fpath), "meta_file": str(meta_fpath),
+                "n_jobs": len(jobs_dict)}
+    else:
+        return jobs, meta_tbl
+
+                    
 """
