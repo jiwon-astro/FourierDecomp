@@ -364,7 +364,7 @@ def load_rrfit_plan(plan_fpath, sids=None):
 # ========================================
 # Individual jobs run in separated temporary folders.
 def run_rrfit_job(job, rrfit_exe, base_workdir=None, is_test=False,
-                  timeout=180):
+                  timeout=300):
     # typical RRFit execution time ~2m30s (for 25 templates)
     rrfit_exe = Path(rrfit_exe).resolve()
     base_dir = rrfit_exe.parent
@@ -457,7 +457,7 @@ def write_source_rrfit_results(outdir, sid, results, posfixs=""):
 # Main function
 # ================================
 def run_rrfit(sids, rrfit_exe, outdir, workdir=None, mode=None, fitlc_list=None, ls_data=None, 
-              bandpairs=(("g", "bp"), ("g", "rp")), max_workers=8, is_test=False, 
+              bandpairs=(("g", "bp"), ("g", "rp")), max_workers=8, is_test=False, timeout=300,
               posfixs="", **kwargs):
     
     outdir = Path(outdir)
@@ -491,7 +491,7 @@ def run_rrfit(sids, rrfit_exe, outdir, workdir=None, mode=None, fitlc_list=None,
     # run all jobs
     try:
         with ThreadPoolExecutor(max_workers=max_workers) as ex:
-            futs = {ex.submit(run_rrfit_job, job, rrfit_exe, workdir, is_test): job
+            futs = {ex.submit(run_rrfit_job, job, rrfit_exe, workdir, is_test, timeout): job
                      for job in job_pool}
             with tqdm(total=len(sids), desc='Sources') as pbar, \
                  tqdm(total=len(job_pool), desc='RRFit Jobs') as job_pbar:
