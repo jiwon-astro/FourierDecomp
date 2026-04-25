@@ -550,7 +550,7 @@ def run_rrfit(sids, rrfit_exe, outdir, workdir=None, mode=None, fitlc_list=None,
                             "n_jobs_total": meta["n_jobs"],
                             "n_jobs_finished": len(results),
                             "n_jobs_success": n_success,
-                            "summary": str(summary_fpath)
+                            "summary_file": str(summary_fpath)
                         })
                         source_written.add(sid)
                         pbar.update(1) 
@@ -561,8 +561,8 @@ def run_rrfit(sids, rrfit_exe, outdir, workdir=None, mode=None, fitlc_list=None,
                                     format="ascii.ecsv", overwrite=True)
                     if source_rows:
                         source_log_tbl = Table(source_rows)
-                        source_log_tbl.write(outdir / "rrfit_source_log.ecsv", 
-                                            format="ascii.ecsv", overwrite=True)
+                        source_log_tbl.write(outdir / "rrfit_source_log.dat", 
+                                            format="ascii.basic", overwrite=True)
                         
     except KeyboardInterrupt:
         print("KeyboardInterrupt detected. Terminating active rrfit.e processes...")
@@ -574,8 +574,8 @@ def run_rrfit(sids, rrfit_exe, outdir, workdir=None, mode=None, fitlc_list=None,
                               format="ascii.ecsv", overwrite=True)
         if source_rows:
             source_log_tbl = Table(source_rows)
-            source_log_tbl.write(outdir / "rrfit_source_log.ecsv", 
-                                    format="ascii.ecsv", overwrite=True)
+            source_log_tbl.write(outdir / "rrfit_source_log.dat", 
+                                    format="ascii.basic", overwrite=True)
         raise
 
     return source_log_tbl, job_log_tbl
