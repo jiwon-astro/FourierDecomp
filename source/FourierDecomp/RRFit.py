@@ -14,7 +14,7 @@ import tempfile
 import subprocess
 import threading
 from collections import defaultdict
-from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor
+from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor, as_completed
 
 from .IO import get_data_config, prepare_fitlc
 from .period_finder import period_fit_boundary_search
@@ -492,7 +492,7 @@ def run_rrfit(sids, rrfit_exe, outdir, workdir=None, mode=None, fitlc_list=None,
             futs = {ex.submit(run_rrfit_job, job, rrfit_exe, workdir, is_test): job
                      for job in job_pool
                      }
-            for fut, job in tqdm(futs.items(), total=len(futs), desc='Run RRFit'): 
+            for fut, job in tqdm(as_completed(futs.items()), total=len(futs), desc='Run RRFit'): 
                 sid = job.sid
                 r = fut.result()
                 results_pool[sid].append(r)
@@ -543,6 +543,7 @@ def run_rrfit(sids, rrfit_exe, outdir, workdir=None, mode=None, fitlc_list=None,
                     source_written.add(sid)
     
     except KeyboardInterrupt:
+        print("KeyboardInterrupt detected. Terminating active rrfit.e processes...")
         kill_all_active_processes()
         # Completed sources already have their own summary/meta files -> partial output
         if log_rows:
