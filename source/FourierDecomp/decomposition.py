@@ -47,7 +47,6 @@ def _cyclic_interval_mask(phi, start, end):
     else: return (phi >= start) | (phi <= end)
 
 def eval_on_grid(theta, n_bands, M_fit, n_grid=200, coef_mode=None):
-    print(n_grid, type(n_grid))
     phi_grid = np.arange(0, 1, 1/n_grid)
     # unpack theta
     _, amp, c1, c2, P, E = unpack_theta(theta, n_bands, M_fit=M_fit, include_amp=True, coef_mode=coef_mode)
@@ -107,7 +106,7 @@ def slope_penalty(theta, args, M_fit, activated_bands,coef_mode=None, n_grid=50,
             # Convert phi to branch coordinates
             interval = (pf - pi)%1.0 
             if interval<=0: interval = 1.0 
-            u_ft = ((phi_ft - pi)%1.0) / interval
+            u_ft = ((phi_ft[in_branch] - pi)%1.0) / interval
             res_branch = res_ft[in_branch]
 
             bins = np.linspace(0, 1, n_branch_bins+1)
@@ -130,7 +129,7 @@ def slope_penalty(theta, args, M_fit, activated_bands,coef_mode=None, n_grid=50,
             else: p_trend = 0.0
             penalties[i] = p_offset + 0.25 * p_trend
 
-    if penalties: return 0.0
+    if len(penalties)==0: return 0.0
     return np.average(penalties, weights=n_ft)
 
 
@@ -173,7 +172,7 @@ def residual_autocorr_score(theta, args, M_fit, activated_bands, coef_mode=None)
         if np.isfinite(rho):
             rhos.append(np.abs(rho)); weights.append(len(res_ft))
 
-    if rhos: return 0.0
+    if len(rhos)==0: return 0.0
     return np.average(rhos, weights=weights)
 
 
@@ -222,18 +221,18 @@ def _fit_wrapper(P0, args, M_fit, bounds_full, activated_bands, phase_gaps,
     # 2. Global minimization
     if use_optim:
         res = minimize(fit_objective, theta0,
-                    args=(args, M_fit, n_dim, activated_bands,
-                          params.lam_spike, params.lam_h, params.n_grid, params.power, coef_mode),
+                    args=(args, M_fit, n_dim, activated_bands, coef_mode,
+                          params.lam_spike, params.lam_h, params.n_grid, params.power, params.branch_err_frac),
                     method='L-BFGS-B',
                     bounds=bounds_full)
+        
         if res.success:
             return res.x, res.fun #, M_fit, n_dim
         
     # optimization failure
-    chi2_init = fit_objective(theta0, *args, M_fit=M_fit, n_dim=n_dim, activated_bands=activated_bands,
+    chi2_init = fit_objective(theta0, *args, M_fit=M_fit, n_dim=n_dim, activated_bands=activated_bands, coef_mode=coef_mode,
                               lam_spike=params.lam_spike, lam_h=params.lam_h, lam_sl=params.lam_sl,
-                              n_grid=params.n_grid, power=params.power, branch_err_frac=params.branch_err_frac, 
-                              coef_mode=coef_mode)
+                              n_grid=params.n_grid, power=params.power, branch_err_frac=params.branch_err_frac)
     return theta0, chi2_init #, M_fit, n_dim
 
 def _build_bounds(n_bands, M_fit, coef_mode=None):
