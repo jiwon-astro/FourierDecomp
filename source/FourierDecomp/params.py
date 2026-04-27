@@ -79,8 +79,8 @@ n_grid    = 50 # grid evaluation (for spike penalty)
 power     = 4.0 # harmonic penalty: ~ j^power
 branch_err_frac   = 0.03
 
-BRANCH_N_BINS     = 5 
-BRANCH_MIN_POINTS = 5
+N_BRANCH_BINS     = 5 
+MIN_BRANCH_POINTS = 5
 HUBER_DELTA       = 2.5
 
 period_fit   = False

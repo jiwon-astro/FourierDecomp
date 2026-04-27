@@ -60,9 +60,6 @@ def spike_penalty(theta, n_bands, M_fit, coef_mode=None, n_grid=50, ratio = 0.05
     d2 = np.roll(fval, -1) - 2*fval + np.roll(fval, 1) # circular curvature calculation (second-difference)
     # spike penalty: (1) localized spike term (2) overall roughness 
     return np.percentile(np.abs(d2), 99)**2 + ratio * np.mean(d2**2)
-    #pk_max = np.max(np.abs(d2)) # spike
-    #pk_tot = np.sum(np.abs(d2)) # total variance
-    #return pk_max + ratio * pk_tot
 
 def slope_penalty(theta, args, M_fit, activated_bands,coef_mode=None, n_grid=50,
                   n_branch_bins=6, min_branch_points=5, min_bin_points=2,
