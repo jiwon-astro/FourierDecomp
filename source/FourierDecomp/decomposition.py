@@ -230,7 +230,7 @@ def _fit_wrapper(P0, args, M_fit, bounds_full, activated_bands, phase_gaps,
             return res.x, res.fun #, M_fit, n_dim
         
     # optimization failure
-    chi2_init = fit_objective(theta0, *args, M_fit=M_fit, n_dim=n_dim, activated_bands=activated_bands, coef_mode=coef_mode,
+    chi2_init = fit_objective(theta0, args, M_fit=M_fit, n_dim=n_dim, activated_bands=activated_bands, coef_mode=coef_mode,
                               lam_spike=params.lam_spike, lam_h=params.lam_h, lam_sl=params.lam_sl,
                               n_grid=params.n_grid, power=params.power, branch_err_frac=params.branch_err_frac)
     return theta0, chi2_init #, M_fit, n_dim
