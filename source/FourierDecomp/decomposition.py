@@ -29,7 +29,7 @@ def spike_penalty(theta, n_bands, M_fit, coef_mode=None, n_grid=200, ratio = 0.0
     # model value at uniform grid
     _, fval = eval_on_grid(theta, n_bands, M_fit, n_grid=n_grid, coef_mode=coef_mode)
     d2 = np.diff(fval, n=2)
-    return np.mean(d2**2)
+    return np.percentile(np.abs(d2), 99)**2 + ratio * np.mean(d2**2)
     #pk_max = np.max(np.abs(d2)) # spike
     #pk_tot = np.sum(np.abs(d2)) # total variance
     #return pk_max + ratio * pk_tot
@@ -281,12 +281,17 @@ def fourier_decomp(sid, mode='ogle', init='lasso',
     # currently, M_MIN = 3  (fixed)
     # for 1O/2O? - better to use M_MIN<3?
     if A_vec_1[0] > 1e-5: # not close to 0
+        power = A_vec_1**2
+        cum = np.cumsum(power) / np.sum(power)
+        M_trunc = np.searchsorted(cum, 0.98) + 1
+        M_trunc = np.clip(M_trunc, M_MIN, M_MAX)
+        """
         dA = np.diff(A_vec_1)
         significant = np.where(dA/A_vec_1[:-1]>params.THRESHOLD)[0]
-        
         if len(significant) > 0:
             M_trunc = 1 + np.min(significant)
             M_trunc = np.max([M_trunc, M_MIN])
+        """
     else:
         M_trunc = M_MIN # M_min
 
