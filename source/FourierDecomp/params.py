@@ -46,7 +46,8 @@ ERR_FLOOR = 0.001
 
 # --- adaptive fitting ---
 THRESHOLD = 0.1    # threshold
-ORDER_BIC_TOL = 10.0 # BIC tolerence 
+#ORDER_BIC_TOL = 10.0 # BIC tolerence 
+BIC_TOL_WEIGHT = 0.1 # tol = WEIGHT *sqrt(2νeff)max(1,χ2_red_best)
 tie_breaker = "minimum" # selection rule for M_fits with similar BIC values
 
 # --- fitting range ---
