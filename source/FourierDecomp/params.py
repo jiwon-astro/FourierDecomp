@@ -47,6 +47,7 @@ ERR_FLOOR = 0.001
 # --- adaptive fitting ---
 THRESHOLD = 0.1    # threshold
 ORDER_BIC_TOL = 10.0 # BIC tolerence 
+tie_breaker = "minimum" # selection rule for M_fits with similar BIC values
 
 # --- fitting range ---
 # Peak-to-peak amplitude range for each band [mag]
