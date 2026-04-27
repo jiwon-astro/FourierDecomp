@@ -236,6 +236,7 @@ def select_order(P0, args, activated_bands, phase_gaps, M_trunc, tie_breaker="mi
     # adaptive BIC tolerence
     tol = bic_tol(N_eff, chi2_red_min, M_best_score, c=1.0)
     near = [x for x in candidates if (x[1] - best_score) <= tol]
+    print(tol, near)
     # tie-breaker / x[0]: M_fit
     if tie_breaker == "minimum":
         near.sort(key=lambda x: x[0]) # minimum order
