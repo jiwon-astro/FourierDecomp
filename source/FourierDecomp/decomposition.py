@@ -25,7 +25,7 @@ def eval_on_grid(theta, n_bands, M_fit, n_grid = 200, coef_mode=None):
     fval  = F(theta_rev, phi_grid, M_fit, coef_mode=coef_mode)
     return phi_grid, fval
 
-def spike_penalty(theta, n_bands, M_fit, coef_mode=None, n_grid=200, ratio = 0.05):
+def spike_penalty(theta, n_bands, M_fit, coef_mode=None, n_grid=50, ratio = 0.05):
     # model value at uniform grid
     _, fval = eval_on_grid(theta, n_bands, M_fit, n_grid=n_grid, coef_mode=coef_mode)
     d2 = np.diff(fval, n=2)
@@ -45,10 +45,10 @@ def adjust_lambda(lam0, gmax, M_fit, N, lam_min = 1e-5, lam_max = 1e-1):
     return np.clip(lam, lam_min, lam_max)
 
 def fit_objective(theta, t, mag, emag, bmask, M_fit, n_dim, activated_bands,
-                  lam_spike=0.0, lam_h=0.0, coef_mode=None):
+                  lam_spike=0.0, lam_h=0.0, n_grid=50, coef_mode=None):
     n_bands = len(activated_bands)
     chi2_red = chisq(theta, t, mag, emag, bmask, M_fit, n_dim, activated_bands, coef_mode=coef_mode)
-    pen_spike = spike_penalty(theta, n_bands, M_fit, coef_mode=coef_mode) # spike penalty
+    pen_spike = spike_penalty(theta, n_bands, M_fit, n_grid=n_grid, coef_mode=coef_mode) # spike penalty
     pen_h = harmonics_penalty(theta, n_bands, M_fit, coef_mode=coef_mode) # harmonics penalty
     return chi2_red + lam_spike * pen_spike + lam_h * pen_h 
 
@@ -84,7 +84,7 @@ def _fit_wrapper(P0, args, M_fit, bounds_full, activated_bands, phase_gaps,
     if use_optim:
         res = minimize(fit_objective, theta0,
                     args=(t, mag, emag, bmask, M_fit, n_dim, activated_bands,
-                          params.lam_spike, params.lam_h, coef_mode),
+                          params.lam_spike, params.lam_h, params.n_grid, coef_mode),
                     method='L-BFGS-B',
                     bounds=bounds_full)
         if res.success:
@@ -92,7 +92,8 @@ def _fit_wrapper(P0, args, M_fit, bounds_full, activated_bands, phase_gaps,
         
     # optimization failure
     chi2_init = fit_objective(theta0, *args, M_fit=M_fit, n_dim=n_dim, activated_bands=activated_bands,
-                              lam_spike=params.lam_spike, lam_h=params.lam_h, coef_mode=coef_mode)
+                              lam_spike=params.lam_spike, lam_h=params.lam_h, 
+                              n_grid=params.n_grid, coef_mode=coef_mode)
     return theta0, chi2_init #, M_fit, n_dim
 
 def _build_bounds(n_bands, M_fit, coef_mode=None):
