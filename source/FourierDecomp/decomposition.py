@@ -46,7 +46,8 @@ def _cyclic_interval_mask(phi, start, end):
     if start <= end: return (phi >= start) & (phi <= end)
     else: return (phi >= start) | (phi <= end)
 
-def eval_on_grid(theta, n_bands, M_fit, n_grid = 200, coef_mode=None):
+def eval_on_grid(theta, n_bands, M_fit, n_grid=200, coef_mode=None):
+    print(n_grid, dtype(n_grid))
     phi_grid = np.arange(0, 1, 1/n_grid)
     # unpack theta
     _, amp, c1, c2, P, E = unpack_theta(theta, n_bands, M_fit=M_fit, include_amp=True, coef_mode=coef_mode)
@@ -54,7 +55,7 @@ def eval_on_grid(theta, n_bands, M_fit, n_grid = 200, coef_mode=None):
     fval  = F(theta_rev, phi_grid, M_fit, coef_mode=coef_mode)
     return phi_grid, fval
 
-def spike_penalty(theta, n_bands, M_fit, coef_mode=None, n_grid=50, ratio = 0.05):
+def spike_penalty(theta, n_bands, M_fit, coef_mode=None, n_grid=50, ratio=0.05):
     # model value at uniform grid
     _, fval = eval_on_grid(theta, n_bands, M_fit, n_grid=n_grid, coef_mode=coef_mode)
     d2 = np.roll(fval, -1) - 2*fval + np.roll(fval, 1) # circular curvature calculation (second-difference)
@@ -62,7 +63,7 @@ def spike_penalty(theta, n_bands, M_fit, coef_mode=None, n_grid=50, ratio = 0.05
     return np.percentile(np.abs(d2), 99)**2 + ratio * np.mean(d2**2)
 
 def slope_penalty(theta, args, M_fit, activated_bands,coef_mode=None, n_grid=50,
-                  n_branch_bins=6, min_branch_points=5, min_bin_points=2,
+                  n_branch_bins=5, min_branch_points=5, min_bin_points=2,
                   branch_err_frac=0.03, huber_delta=2.5):
     """
     Examine the skewness of the residual
