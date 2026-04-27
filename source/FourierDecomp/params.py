@@ -48,6 +48,7 @@ ERR_FLOOR = 0.001
 THRESHOLD = 0.1    # threshold
 #ORDER_BIC_TOL = 10.0 # BIC tolerence 
 BIC_TOL_WEIGHT = 0.1 # tol = WEIGHT *sqrt(2νeff)max(1,χ2_red_best)
+RES_CORR_WEIGHT = 3 # residual unit-lag autocorrelation weight (for order selection)
 tie_breaker = "minimum" # selection rule for M_fits with similar BIC values
 
 # --- fitting range ---
@@ -73,8 +74,14 @@ lam_max = 5e-2
 
 lam_spike = 1e-1 # spike penalty weight
 lam_h     = 10 # harmonic penalty weight
+lam_sl    = 3e-2 # slope residual penalty weight
 n_grid    = 50 # grid evaluation (for spike penalty)
 power     = 4.0 # harmonic penalty: ~ j^power
+branch_err_frac   = 0.03
+
+BRANCH_N_BINS     = 5 
+BRANCH_MIN_POINTS = 5
+HUBER_DELTA       = 2.5
 
 period_fit   = False
 use_optim    = True

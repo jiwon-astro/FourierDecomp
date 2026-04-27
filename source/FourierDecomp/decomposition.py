@@ -28,6 +28,24 @@ def bic_tol(N_eff, k_best, chi2_red_best, c=1.0, floor=2.0):
     dof_eff = max(N_eff - k_best, 1)
     return max(floor, c * np.sqrt(2.0 * dof_eff) * max(1.0, chi2_red_best))
 
+def huber2_loss(z, delta=2.5):
+    # Huber loss (Robust loss)
+    # Small residual: ~ z^2
+    # Large residual: ~ linear in |z|
+    return np.where(np.abs(z) <= delta, 0.5 * z**2,
+                    delta * (np.abs(z) - 0.5 * delta))
+
+def _cyclic_interval_mask(phi, start, end):
+    # Return mask for cyclic interval [start, end] on phase circle.
+    # - If start < end: start <= phi <= end
+    # - If start > end: interval wraps around phase 1.
+    phi = np.asarray(phi) % 1.0
+    start = start % 1.0
+    end = end % 1.0
+
+    if start <= end: return (phi >= start) & (phi <= end)
+    else: return (phi >= start) | (phi <= end)
+
 def eval_on_grid(theta, n_bands, M_fit, n_grid = 200, coef_mode=None):
     phi_grid = np.arange(0, 1, 1/n_grid)
     # unpack theta
@@ -46,29 +64,77 @@ def spike_penalty(theta, n_bands, M_fit, coef_mode=None, n_grid=50, ratio = 0.05
     #pk_tot = np.sum(np.abs(d2)) # total variance
     #return pk_max + ratio * pk_tot
 
-"""
-def wiggle_penalty(theta, n_bands, M_fit, coef_mode=None, n_grid=50)
-    # derivative sign change penalty (wiggle/ringing)
-    _, fval = eval_on_grid(theta, n_bands, M_fit, n_grid=n_grid, coef_mode=coef_mode)
-    dy = np.roll(fval, -1) - fval # circular first-difference
-    # Ignore tiny numerical slopes
-    scale = np.nanpercentile(np.abs(dy), 90)
-    eps = max(1e-8, 0.02 * scale)
-    s = np.sign(dy)
-    s[np.abs(dy) < eps] = 0.0
-    # Count sign reversals after removing zeros
-    snz = s[s != 0]
-    if len(snz) < 3: return 0.0
-    n_turn = np.sum(snz[1:] * snz[:-1] < 0)
+def slope_penalty(theta, args, M_fit, activated_bands,coef_mode=None, n_grid=50,
+                  n_branch_bins=6, min_branch_points=5, min_bin_points=2,
+                  branch_err_frac=0.03, huber_delta=2.5):
+    """
+    Examine the skewness of the residual
+    - Prevent cases where the min/max peaks are fitted correctly, 
+      while the middle of lightcurve (rising/descending branch) systematically deviates from the observed lightcurve
 
-    # Cepheid-like single-peaked template should not need many turns.
-    # Allow two turns per cycle; penalize extra reversals.
-    extra_turn = max(0, n_turn - 2)
+    # parameters
+    - branch_err_frac: fractional error for band amplitude
+    - n_branch_bins: number of bins between peak/trough and trough/peak
+    """
+    t, mag, emag, bmasks = args
+    n_bands = len(activated_bands)
+    # Model template on uniform phase grid
+    phi_grid, fval_grid = eval_on_grid(theta, n_bands, M_fit, n_grid=n_grid, coef_mode=coef_mode)
+    m0, amp0, c1, c2, P, E = unpack_theta(theta, n_bands, M_fit=M_fit, include_amp=True, coef_mode=coef_mode)
 
-    # Also penalize very localized derivative jumps
-    ddy = np.roll(dy, -1) - dy
-    return float(extra_turn ** 2 + 0.1 * np.percentile(np.abs(ddy), 99.0) ** 2)
-"""
+    # Identify rising/descending branch
+    idx_peak,  idx_trough = int(np.argmin(fval_grid)), int(np.argmax(fval_grid))
+    phi_peak, phi_trough  = phi_grid[idx_peak], phi_grid[idx_trough]
+    branches = [(phi_peak, phi_trough), (phi_trough, phi_peak)] # descending, rising branch
+    
+    penalties, n_ft = np.zeros(n_bands), np.zeros(n_bands)
+    for i, ib in enumerate(activated_bands):
+        bmask = bmasks[ib]
+        t_ft, mag_ft, emag_ft = t[bmask], mag[bmask], emag[bmask]
+        n_ft[i] = len(t_ft)
+
+        phi_ft = ((t_ft - E)/P)%1.0
+        theta_ft = [m0[i], amp0[i], c1, c2, P, E]
+        # residual
+        f_ft = F(theta_ft, t_ft, M_fit, coef_mode=coef_mode)
+        err_eff = np.sqrt(np.maximum(emag_ft, params.ERR_FLOOR)**2
+                          + (branch_err_frac * amp0[i])**2) # effective error considering the fraction of peak-to-peak amplitude
+        res_ft = (mag_ft - f_ft) / err_eff
+
+        # branch
+        for pi, pf in branches:
+            in_branch = _cyclic_interval_mask(phi_ft, pi, pf)
+            if in_branch.sum() < min_branch_points: # insufficient points
+                continue 
+            # Convert phi to branch coordinates
+            interval = (pf - pi)%1.0 
+            if interval<=0: interval = 1.0 
+            u_ft = ((phi_ft - pi)%1.0) / interval
+            res_branch = res_ft[in_branch]
+
+            bins = np.linspace(0, 1, n_branch_bins+1)
+            bin_meds, bin_cnts = [], []
+            for j in range(n_branch_bins):
+                bin_mask = (u_ft>=bins[j])&(u_ft<bins[j+1])
+                if bin_mask.sum() < min_bin_points:
+                    continue
+                bin_meds.append(np.nanmedian(res_branch[bin_mask]))
+                bin_cnts.append(bin_mask.sum())
+            bin_meds, bin_cnts = np.asarray(bin_meds), np.asarray(bin_cnts)
+
+            # Penalize coherent offset of branch bins
+            # If the branch middle systematically falls below/above data,
+            # several adjacent bin medians will have the same sign.
+            p_offset = np.average(huber2_loss(bin_meds, delta=huber_delta), weights=bin_cnts)
+            if len(bin_meds) >=3:
+                dz = np.diff(bin_meds)
+                p_trend = np.mean(huber2_loss(dz, delta=huber_delta))
+            else: p_trend = 0.0
+            penalties[i] = p_offset + 0.25 * p_trend
+
+    if penalties: return 0.0
+    return np.average(penalties, weights=n_ft)
+
 
 def harmonics_penalty(theta, n_bands, M_fit, coef_mode=None, power=2.0):
     _, _, c1, c2, _, _ = unpack_theta(theta, n_bands, M_fit=M_fit, include_amp=True, coef_mode=coef_mode)
@@ -113,13 +179,19 @@ def residual_autocorr_score(theta, args, M_fit, activated_bands, coef_mode=None)
     return np.average(rhos, weights=weights)
 
 
-def fit_objective(theta, t, mag, emag, bmask, M_fit, n_dim, activated_bands,
-                  lam_spike=0.0, lam_h=0.0, n_grid=50, power=2.0, coef_mode=None):
+def fit_objective(theta, args, M_fit, n_dim, activated_bands, coef_mode=None,
+                  lam_spike=0.0, lam_h=0.0, lam_sl=0.0, n_grid=50, power=2.0, branch_err_frac=0.03):
+    
     n_bands = len(activated_bands)
-    chi2_red = chisq(theta, t, mag, emag, bmask, M_fit, n_dim, activated_bands, coef_mode=coef_mode)
+    chi2_red = chisq(theta, *args, M_fit, n_dim, activated_bands, coef_mode=coef_mode)
     pen_spike = spike_penalty(theta, n_bands, M_fit, n_grid=n_grid, coef_mode=coef_mode) # spike penalty
     pen_h = harmonics_penalty(theta, n_bands, M_fit, coef_mode=coef_mode, power=power) # harmonics penalty
-    return chi2_red + lam_spike * pen_spike + lam_h * pen_h 
+    pen_slope = slope_penalty(theta, args, M_fit, activated_bands, coef_mode=coef_mode,
+                              n_grid=n_grid, branch_err_frac=branch_err_frac, 
+                              n_branch_bins=params.N_BRANCH_BINS, min_branch_points=params.MIN_BRANCH_POINTS,
+                              huber_delta=params.HUBER_DELTA)
+    
+    return chi2_red + lam_spike * pen_spike + lam_h * pen_h + lam_sl * pen_slope
 
 def _fit_wrapper(P0, args, M_fit, bounds_full, activated_bands, phase_gaps, 
                 period_fit=False, use_optim=False, adaptive_lam=True, verbose=False):
@@ -152,7 +224,7 @@ def _fit_wrapper(P0, args, M_fit, bounds_full, activated_bands, phase_gaps,
     # 2. Global minimization
     if use_optim:
         res = minimize(fit_objective, theta0,
-                    args=(t, mag, emag, bmask, M_fit, n_dim, activated_bands,
+                    args=(args, M_fit, n_dim, activated_bands,
                           params.lam_spike, params.lam_h, params.n_grid, params.power, coef_mode),
                     method='L-BFGS-B',
                     bounds=bounds_full)
@@ -161,8 +233,9 @@ def _fit_wrapper(P0, args, M_fit, bounds_full, activated_bands, phase_gaps,
         
     # optimization failure
     chi2_init = fit_objective(theta0, *args, M_fit=M_fit, n_dim=n_dim, activated_bands=activated_bands,
-                              lam_spike=params.lam_spike, lam_h=params.lam_h, 
-                              n_grid=params.n_grid, power=params.power, coef_mode=coef_mode)
+                              lam_spike=params.lam_spike, lam_h=params.lam_h, lam_sl=params.lam_sl,
+                              n_grid=params.n_grid, power=params.power, branch_err_frac=params.branch_err_frac, 
+                              coef_mode=coef_mode)
     return theta0, chi2_init #, M_fit, n_dim
 
 def _build_bounds(n_bands, M_fit, coef_mode=None):
@@ -223,7 +296,11 @@ def select_order(P0, args, activated_bands, phase_gaps, M_trunc, tie_breaker="mi
         _, fval_grid = eval_on_grid(theta_opt, n_bands, M_fit, coef_mode=coef_mode)
         chi2_red_opt = chisq(theta_opt, *args, M_fit, len(theta_opt),
                               activated_bands, coef_mode=coef_mode)
-        score = bic(chi2_red_opt, N_eff, len(theta_opt)) # BIC score
+        
+        bic_score = bic(chi2_red_opt, N_eff, len(theta_opt)) # BIC score
+        rho = residual_autocorr_score(theta_opt, args, M_fit, activated_bands, coef_mode=coef_mode) # residual auto-correlation
+        score = bic_score + params.RES_CORR_WEIGHT * np.abs(rho)
+         
         candidates.append((M_fit, score, chi2_red_opt, obj_opt, theta_opt))
         chi2_reds.append(chi2_red_opt); scores.append(score)
         if verbose:
