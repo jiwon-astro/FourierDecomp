@@ -47,7 +47,7 @@ def _cyclic_interval_mask(phi, start, end):
     else: return (phi >= start) | (phi <= end)
 
 def eval_on_grid(theta, n_bands, M_fit, n_grid=200, coef_mode=None):
-    print(n_grid, dtype(n_grid))
+    print(n_grid, type(n_grid))
     phi_grid = np.arange(0, 1, 1/n_grid)
     # unpack theta
     _, amp, c1, c2, P, E = unpack_theta(theta, n_bands, M_fit=M_fit, include_amp=True, coef_mode=coef_mode)
