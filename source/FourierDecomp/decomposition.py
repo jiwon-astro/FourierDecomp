@@ -225,7 +225,7 @@ def select_order(P0, args, activated_bands, phase_gaps, M_trunc, tie_breaker="mi
                               activated_bands, coef_mode=coef_mode)
         score = bic(chi2_red_opt, N_eff, len(theta_opt)) # BIC score
         candidates.append((M_fit, score, chi2_red_opt, obj_opt, theta_opt))
-        chi2_reds.append(chi2_red_opt); scores.append(chi2_red_opt)
+        chi2_reds.append(chi2_red_opt); scores.append(score)
         if verbose:
             print(f"[Order scanning] M = {M_fit:2d} / obj = {obj_opt:.2f} / score = {score:.2f}")
     chi2_reds, scores = np.asarray(chi2_reds), np.asarray(scores)
