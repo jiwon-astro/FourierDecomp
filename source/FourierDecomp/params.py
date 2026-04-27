@@ -71,7 +71,8 @@ lam_max = 5e-2
 
 lam_spike = 1e-1 # spike penalty weight
 lam_h     = 10 # harmonic penalty weight
-n_grid    = 50 # grid evaluation
+n_grid    = 50 # grid evaluation (for spike penalty)
+power     = 4.0 # harmonic penalty: ~ j^power
 
 period_fit   = False
 use_optim    = True
