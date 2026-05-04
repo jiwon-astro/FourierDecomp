@@ -65,7 +65,7 @@ def slope_penalty(theta, args, M_fit, activated_bands,coef_mode=None, n_grid=50,
                   n_branch_bins=5, min_branch_points=5, min_bin_points=2,
                   branch_err_frac=0.03, huber_delta=2.5):
     """
-    Examine the skewness of the residual
+    Branch residual penalty
     - Prevent cases where the min/max peaks are fitted correctly, 
       while the middle of lightcurve (rising/descending branch) systematically deviates from the observed lightcurve
 
@@ -82,7 +82,10 @@ def slope_penalty(theta, args, M_fit, activated_bands,coef_mode=None, n_grid=50,
     # Identify rising/descending branch
     idx_peak,  idx_trough = int(np.argmin(fval_grid)), int(np.argmax(fval_grid))
     phi_peak, phi_trough  = phi_grid[idx_peak], phi_grid[idx_trough]
-    branches = [(phi_peak, phi_trough), (phi_trough, phi_peak)] # descending, rising branch
+    branches = np.array([[phi_peak, phi_trough], 
+                         [phi_trough, phi_peak]]) # descending, rising branch
+    intervals =  np.diff(branches, axis=1)%1.0
+    intervals[intervals<=0] = 1.0
     
     penalties, n_ft = np.zeros(n_bands), np.zeros(n_bands)
     for i, ib in enumerate(activated_bands):
@@ -99,15 +102,65 @@ def slope_penalty(theta, args, M_fit, activated_bands,coef_mode=None, n_grid=50,
         res_ft = (mag_ft - f_ft) / err_eff
 
         # branch
-        for pi, pf in branches:
+        for (pi, pf), interval in zip(branches, intervals):
             in_branch = _cyclic_interval_mask(phi_ft, pi, pf)
             if in_branch.sum() < min_branch_points: # insufficient points
                 continue 
             # Convert phi to branch coordinates
-            interval = (pf - pi)%1.0 
-            if interval<=0: interval = 1.0 
             u_ft = ((phi_ft[in_branch] - pi)%1.0) / interval
             res_branch = res_ft[in_branch]
+
+             # bin index along branch
+            bin_idx = np.floor(u_ft * n_branch_bins).astype(int)
+            bin_idx = np.clip(bin_idx, 0, n_branch_bins - 1)
+
+            # group = band × branch-bin
+            group = iact * n_branch_bins + bin_idx
+            n_group = n_bands * n_branch_bins
+
+            cnt = np.bincount(group, minlength=n_group)
+            sum_z = np.bincount(group, weights=z, minlength=n_group)
+
+            valid = cnt >= min_bin_points
+            if not np.any(valid):
+                continue
+
+            mean_z = np.zeros(n_group, dtype=float)
+            mean_z[valid] = sum_z[valid] / cnt[valid]
+
+            # Huber penalty for coherent branch-bin residuals
+            p_bin = huber2_loss(mean_z[valid], delta=huber_delta)
+
+            # weighted average over valid bins
+            p_offset = np.average(p_bin, weights=cnt[valid])
+
+            # weak trend term per band
+            p_trend_list = []
+            w_trend_list = []
+
+            mean_z_2d = mean_z.reshape(n_bands, n_branch_bins)
+            cnt_2d = cnt.reshape(n_bands, n_branch_bins)
+            valid_2d = valid.reshape(n_bands, n_branch_bins)
+
+            for ia in range(n_bands):
+                ok = valid_2d[ia]
+                if np.sum(ok) < 3:
+                    continue
+
+                vals = mean_z_2d[ia, ok]
+                dz = np.diff(vals)
+
+                p_trend_list.append(np.mean(huber2_loss(dz, delta=huber_delta)))
+                w_trend_list.append(np.sum(cnt_2d[ia, ok]))
+
+            if len(p_trend_list) > 0:
+                p_trend = np.average(p_trend_list, weights=w_trend_list)
+            else:
+                p_trend = 0.0
+
+            penalties.append(p_offset + 0.25 * p_trend)
+
+
 
             bins = np.linspace(0, 1, n_branch_bins+1)
             bin_meds, bin_cnts = [], []
@@ -178,15 +231,17 @@ def residual_autocorr_score(theta, args, M_fit, activated_bands, coef_mode=None)
 
 def fit_objective(theta, args, M_fit, n_dim, activated_bands, coef_mode=None,
                   lam_spike=0.0, lam_h=0.0, lam_sl=0.0, n_grid=50, power=2.0, branch_err_frac=0.03):
-    
     n_bands = len(activated_bands)
     chi2_red = chisq(theta, *args, M_fit, n_dim, activated_bands, coef_mode=coef_mode)
-    pen_spike = spike_penalty(theta, n_bands, M_fit, n_grid=n_grid, coef_mode=coef_mode) # spike penalty
-    pen_h = harmonics_penalty(theta, n_bands, M_fit, coef_mode=coef_mode, power=power) # harmonics penalty
-    pen_slope = slope_penalty(theta, args, M_fit, activated_bands, coef_mode=coef_mode,
-                              n_grid=n_grid, branch_err_frac=branch_err_frac, 
-                              n_branch_bins=params.N_BRANCH_BINS, min_branch_points=params.MIN_BRANCH_POINTS,
-                              huber_delta=params.HUBER_DELTA)
+    if lam_spike:
+        pen_spike = spike_penalty(theta, n_bands, M_fit, n_grid=n_grid, coef_mode=coef_mode) # spike penalty
+    if lam_h:
+        pen_h = harmonics_penalty(theta, n_bands, M_fit, coef_mode=coef_mode, power=power) # harmonics penalty
+    if lam_sl:
+        pen_slope = slope_penalty(theta, args, M_fit, activated_bands, coef_mode=coef_mode,
+                                n_grid=n_grid, branch_err_frac=branch_err_frac, 
+                                n_branch_bins=params.N_BRANCH_BINS, min_branch_points=params.MIN_BRANCH_POINTS,
+                                huber_delta=params.HUBER_DELTA)
     
     return chi2_red + lam_spike * pen_spike + lam_h * pen_h + lam_sl * pen_slope
 

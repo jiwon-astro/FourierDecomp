@@ -83,6 +83,8 @@ def harmonic_periods(P0, harmonics = 2):
 
 def aliased_periods(P, alias_freqs, n=1, m=1):
     alias_freqs = np.asarray(alias_freqs).reshape(-1,1)
+    if len(P)==0 or len(alias_freqs) ==0:
+        return np.array([])
     P2s = []
     for sign in [-1, 1]:
         Ps = np.vstack([1/np.abs(n/P+m*sign*alias_freqs)])
@@ -218,6 +220,8 @@ def period_fit_boundary_search(t, mag, emag, bands, n0 = 5, K = 5, Kw = 10,
     P_alias = []
     for n in range(1, 1+harmonics):
         P2s = aliased_periods(P_coarse, alias_freqs, n=n, m=1)
+        if (P2s is None) or len(P2s)==0: 
+            continue
         P_alias.append(np.hstack(P2s))
     P_alias = np.hstack(P_alias)
     P_alias = P_alias[(P_alias >= pmin) & (P_alias <= pmax)] # ensure range

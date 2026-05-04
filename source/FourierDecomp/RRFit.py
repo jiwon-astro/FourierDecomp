@@ -290,9 +290,13 @@ def build_rrfit_plan(sids, workdir, outdir, mode='gaia', ls_data=None, fitlc_lis
     
     rows = []
     with ProcessPoolExecutor(max_workers=max_workers) as ex:
-        futs = [ex.submit(build_rrfit_jobs, **t) for t in tasks]
+        futs = {ex.submit(build_rrfit_jobs, **t): t for t in tasks}
         for fut in tqdm(futs, total=len(futs), desc="Constructing RRFit jobs"):
-            rows.append(fut.result())
+            task = futs[fut]; sid = task.get("sid")
+            try:
+                rows.append(fut.result())
+            except Exception as e:
+                raise RuntimeError(f"Failed while constructing RRFit job for sid={sid}") from e
 
     tbl = Table(rows)
     if posfixs and (not posfixs.startswith("_")): posfixs = "_" + posfixs
