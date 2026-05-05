@@ -74,116 +74,72 @@ def slope_penalty(theta, args, M_fit, activated_bands,coef_mode=None, n_grid=50,
     - n_branch_bins: number of bins between peak/trough and trough/peak
     """
     t, mag, emag, bmasks = args
+    iband = np.zeros_like(t)
     n_bands = len(activated_bands)
+    for i in range(len(bmasks)):
+        iband[bmasks[i]] = i
+
     # Model template on uniform phase grid
-    phi_grid, fval_grid = eval_on_grid(theta, n_bands, M_fit, n_grid=n_grid, coef_mode=coef_mode)
     m0, amp0, c1, c2, P, E = unpack_theta(theta, n_bands, M_fit=M_fit, include_amp=True, coef_mode=coef_mode)
+    phi_grid, fval_grid = eval_on_grid(theta, n_bands, M_fit, n_grid=n_grid, coef_mode=coef_mode)
+    
+    phi = ((t-P)/P)%1.0
+    fval = F(theta, t, M_fit=M_fit, coef_mode=coef_mode)
+    amp0_eff = np.maximum(amp0)
+    err_eff = np.sqrt(np.maximum(emag, params.ERR_FLOOR)**2 + (branch_err_frac * amp0_eff)**2)
+
+    z = (mag - fval) / err_eff
+    z = np.clip(z, -8.0, 8.0)
 
     # Identify rising/descending branch
-    idx_peak,  idx_trough = int(np.argmin(fval_grid)), int(np.argmax(fval_grid))
-    phi_peak, phi_trough  = phi_grid[idx_peak], phi_grid[idx_trough]
+    phi_peak, phi_trough  = phi_grid[np.argmin(fval_grid)], phi_grid[np.argmax(fval_grid)]
     branches = np.array([[phi_peak, phi_trough], 
                          [phi_trough, phi_peak]]) # descending, rising branch
-    intervals =  np.diff(branches, axis=1)%1.0
-    intervals[intervals<=0] = 1.0
-    
-    penalties, n_ft = np.zeros(n_bands), np.zeros(n_bands)
-    for i, ib in enumerate(activated_bands):
-        bmask = bmasks[ib]
-        t_ft, mag_ft, emag_ft = t[bmask], mag[bmask], emag[bmask]
-        n_ft[i] = len(t_ft)
 
-        phi_ft = ((t_ft - E)/P)%1.0
-        theta_ft = [m0[i], amp0[i], c1, c2, P, E]
-        # residual
-        f_ft = F(theta_ft, t_ft, M_fit, coef_mode=coef_mode)
-        err_eff = np.sqrt(np.maximum(emag_ft, params.ERR_FLOOR)**2
-                          + (branch_err_frac * amp0[i])**2) # effective error considering the fraction of peak-to-peak amplitude
-        res_ft = (mag_ft - f_ft) / err_eff
+    penalties = []
+    weights = []
 
-        # branch
-        for (pi, pf), interval in zip(branches, intervals):
-            in_branch = _cyclic_interval_mask(phi_ft, pi, pf)
-            if in_branch.sum() < min_branch_points: # insufficient points
-                continue 
-            # Convert phi to branch coordinates
-            u_ft = ((phi_ft[in_branch] - pi)%1.0) / interval
-            res_branch = res_ft[in_branch]
+    # only loop over two branches
+    for bidx, (pi, pf) in enumerate(branches):
+        interval = (pf - pi)%1.0
+        in_branch = _cyclic_interval_mask(phi, pi, pf)
 
-             # bin index along branch
-            bin_idx = np.floor(u_ft * n_branch_bins).astype(int)
-            bin_idx = np.clip(bin_idx, 0, n_branch_bins - 1)
+        if np.sum(in_branch) < min_branch_points:
+            continue
 
-            # group = band × branch-bin
-            group = iact * n_branch_bins + bin_idx
-            n_group = n_bands * n_branch_bins
+        # Convert phi to branch coordinates
+        ub = ((phi[in_branch] - pi) % 1.0) / interval
+        zb = z[in_branch]
+        ib = iband[in_branch]
 
-            cnt = np.bincount(group, minlength=n_group)
-            sum_z = np.bincount(group, weights=z, minlength=n_group)
+        # branch coordinate bin
+        bin_idx = np.floor(ub * n_branch_bins).astype(int)
+        bin_idx = np.clip(bin_idx, 0, n_branch_bins - 1)
 
-            valid = cnt >= min_bin_points
-            if not np.any(valid):
-                continue
+        # group index: band × branch-bin
+        group = ib * n_branch_bins + bin_idx
+        n_group = n_bands * n_branch_bins
 
-            mean_z = np.zeros(n_group, dtype=float)
-            mean_z[valid] = sum_z[valid] / cnt[valid]
+        cnt_branch = np.bincount(group, minlength=n_group)
+        sum_zb = np.bincount(group, weights=zb, minlength=n_group)
 
-            # Huber penalty for coherent branch-bin residuals
-            p_bin = huber2_loss(mean_z[valid], delta=huber_delta)
+        valid = cnt_branch >= min_bin_points
+        if not np.any(valid): continue
 
-            # weighted average over valid bins
-            p_offset = np.average(p_bin, weights=cnt[valid])
+        mean_zb = np.zeros(n_group, dtype=float)
+        mean_zb[valid] = sum_zb[valid] / cnt_branch[valid]
 
-            # weak trend term per band
-            p_trend_list = []
-            w_trend_list = []
+        # coherent branch residual penalty
+        p_bin = huber2_loss(mean_zb[valid], delta=huber_delta)
+        p = np.average(p_bin, weights=cnt[valid])
 
-            mean_z_2d = mean_z.reshape(n_bands, n_branch_bins)
-            cnt_2d = cnt.reshape(n_bands, n_branch_bins)
-            valid_2d = valid.reshape(n_bands, n_branch_bins)
+        penalties.append(p)
+        weights.append(np.sum(cnt_branch[valid]))
 
-            for ia in range(n_bands):
-                ok = valid_2d[ia]
-                if np.sum(ok) < 3:
-                    continue
+    if len(penalties) == 0:
+        return 0.0
 
-                vals = mean_z_2d[ia, ok]
-                dz = np.diff(vals)
-
-                p_trend_list.append(np.mean(huber2_loss(dz, delta=huber_delta)))
-                w_trend_list.append(np.sum(cnt_2d[ia, ok]))
-
-            if len(p_trend_list) > 0:
-                p_trend = np.average(p_trend_list, weights=w_trend_list)
-            else:
-                p_trend = 0.0
-
-            penalties.append(p_offset + 0.25 * p_trend)
-
-
-
-            bins = np.linspace(0, 1, n_branch_bins+1)
-            bin_meds, bin_cnts = [], []
-            for j in range(n_branch_bins):
-                bin_mask = (u_ft>=bins[j])&(u_ft<bins[j+1])
-                if bin_mask.sum() < min_bin_points:
-                    continue
-                bin_meds.append(np.nanmedian(res_branch[bin_mask]))
-                bin_cnts.append(bin_mask.sum())
-            bin_meds, bin_cnts = np.asarray(bin_meds), np.asarray(bin_cnts)
-
-            # Penalize coherent offset of branch bins
-            # If the branch middle systematically falls below/above data,
-            # several adjacent bin medians will have the same sign.
-            p_offset = np.average(huber2_loss(bin_meds, delta=huber_delta), weights=bin_cnts)
-            if len(bin_meds) >=3:
-                dz = np.diff(bin_meds)
-                p_trend = np.mean(huber2_loss(dz, delta=huber_delta))
-            else: p_trend = 0.0
-            penalties[i] = p_offset + 0.25 * p_trend
-
-    if len(penalties)==0: return 0.0
-    return np.average(penalties, weights=n_ft)
+    return float(np.average(penalties, weights=weights))
 
 
 def harmonics_penalty(theta, n_bands, M_fit, coef_mode=None, power=2.0):

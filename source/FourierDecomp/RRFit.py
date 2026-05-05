@@ -296,6 +296,12 @@ def build_rrfit_plan(sids, workdir, outdir, mode='gaia', ls_data=None, fitlc_lis
             try:
                 rows.append(fut.result())
             except Exception as e:
+                print(f"[RRFit plan failed] sid={sid}: {repr(e)}")
+                rows.append({
+                    "ID": sid,
+                    "status": "failed",
+                    "error": repr(e),
+                })
                 raise RuntimeError(f"Failed while constructing RRFit job for sid={sid}") from e
 
     tbl = Table(rows)

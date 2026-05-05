@@ -10,7 +10,7 @@ from astropy.stats import sigma_clip
 from .params import pmin, pmax, n0, delta_P_tol
 from .IO import get_data_config
 
-from scipy.ndimage import median_filter
+from scipy.ndimage import median_filter, gaussian_filter1d
 
 import warnings
 warnings.filterwarnings('ignore')
@@ -205,13 +205,18 @@ def period_fit_boundary_search(t, mag, emag, bands, n0 = 5, K = 5, Kw = 10,
 
     # 3) window function
     Pw = window_function(t, bmask, freqs)
-    bkg_Pw, sig_Pw = local_background(Pw, win = 201) # calculate local background level by moving-mdeian filter
-    Pw_flat = Pw - bkg_Pw #/ sig_P_W
-
     distance = max(10, int(5*n0))
-    pidx_w = find_peaks(Pw_flat, height = snr_window * sig_Pw, 
-                    prominence=max(5, 2*snr_window)*sig_Pw, distance=distance)[0] 
-    prom_alias = peak_prominences(Pw_flat, pidx_w)[0]
+    height_thr = np.percentile(Pw, 95)
+    prom_thr = 5.0 * np.median(np.abs(Pw - np.median(Pw)))
+    pidx_w, props_w = find_peaks(Pw, height=height_thr, prominence=prom_thr,
+                          distance=distance)
+    """
+    bkg_Pw, sig_Pw = local_background(Pw, win = n0*100+1) # calculate local background level by moving-mdeian filter
+    Pw_flat = Pw - bkg_Pw #/ sig_P_W
+    pidx_w, props_w = find_peaks(Pw_flat, height = snr_window * sig_Pw, 
+                    prominence=max(5, 2*snr_window)*sig_Pw, distance=distance)
+    """
+    prom_alias = props_w['prominences']
     pidx_w_sorted = pidx_w[np.argsort(prom_alias)][::-1] # sorting with respect to prominences 
     # Pw_alias = Pw[pidx_sorted][:Kw]
     alias_freqs = freqs[pidx_w_sorted][:Kw].tolist()
