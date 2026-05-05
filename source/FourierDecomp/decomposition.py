@@ -194,6 +194,7 @@ def fit_objective(theta, args, M_fit, n_dim, activated_bands, coef_mode=None,
                   lam_spike=0.0, lam_h=0.0, lam_sl=0.0, n_grid=50, power=2.0, branch_err_frac=0.03):
     n_bands = len(activated_bands)
     chi2_red = chisq(theta, *args, M_fit, n_dim, activated_bands, coef_mode=coef_mode)
+    pen_spike, pen_h, pen_slope = 0., 0., 0.
     if lam_spike:
         pen_spike = spike_penalty(theta, n_bands, M_fit, n_grid=n_grid, coef_mode=coef_mode) # spike penalty
     if lam_h:
@@ -298,7 +299,8 @@ def select_order(P0, args, activated_bands, phase_gaps, M_trunc, tie_breaker="mi
     chi2_reds, scores = [], []
 
     N_eff = calc_N_eff(phi, n_grid=params.n_grid)
-    print(f"N_eff (phase occupation) = {N_eff:.2f} / {params.n_grid}")
+    if verbose:
+        print(f"N_eff (phase occupation) = {N_eff:.2f} / {params.n_grid}")
     M_ub = min([params.M_MAX, M_trunc + params.M_PAD])
     M_list = np.arange(params.M_MIN, M_ub+1)
     for M_fit in M_list:
