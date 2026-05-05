@@ -74,7 +74,7 @@ def slope_penalty(theta, args, M_fit, activated_bands,coef_mode=None, n_grid=50,
     - n_branch_bins: number of bins between peak/trough and trough/peak
     """
     t, mag, emag, bmasks = args
-    iband = np.zeros_like(t)
+    iband = np.zeros(len(t), dtype='int')
     n_bands = len(activated_bands)
 
     fval = np.zeros_like(t)
@@ -92,7 +92,7 @@ def slope_penalty(theta, args, M_fit, activated_bands,coef_mode=None, n_grid=50,
     amp0_eff = amp0.max()
     err_eff = np.sqrt(np.maximum(emag, params.ERR_FLOOR)**2 + (branch_err_frac * amp0_eff)**2)
 
-    phi = ((t-P)/P)%1.0
+    phi = ((t-E)/P)%1.0
     z = (mag - fval) / err_eff
     z = np.clip(z, -8.0, 8.0)
 
@@ -105,7 +105,7 @@ def slope_penalty(theta, args, M_fit, activated_bands,coef_mode=None, n_grid=50,
     weights = []
 
     # only loop over two branches
-    for bidx, (pi, pf) in enumerate(branches):
+    for (pi, pf) in branches:
         interval = (pf - pi)%1.0
         in_branch = _cyclic_interval_mask(phi, pi, pf)
 
