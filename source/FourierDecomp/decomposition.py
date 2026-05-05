@@ -80,7 +80,7 @@ def slope_penalty(theta, args, M_fit, activated_bands,coef_mode=None, n_grid=50,
     fval = np.zeros_like(t)
     m0, amp0, c1, c2, P, E = unpack_theta(theta, n_bands, M_fit=M_fit, include_amp=True, coef_mode=coef_mode) 
     for i in range(len(bmasks)):
-        mask = bmasks[ib]
+        mask = bmasks[i]
         iband[mask] = i
         theta_ft = [m0[i], amp0[i], c1, c2, P, E]
         # residual
