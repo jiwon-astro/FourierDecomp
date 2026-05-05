@@ -89,6 +89,7 @@ def slope_penalty(theta, args, M_fit, activated_bands,coef_mode=None, n_grid=50,
     # Model template on uniform phase grid
     phi_grid, fval_grid = eval_on_grid(theta, n_bands, M_fit, n_grid=n_grid, coef_mode=coef_mode)
     
+    print(amp0)
     amp0_eff = np.maximum(amp0)
     err_eff = np.sqrt(np.maximum(emag, params.ERR_FLOOR)**2 + (branch_err_frac * amp0_eff)**2)
 
