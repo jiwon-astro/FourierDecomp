@@ -76,23 +76,23 @@ def slope_penalty(theta, args, M_fit, activated_bands,coef_mode=None, n_grid=50,
     t, mag, emag, bmasks = args
     iband = np.zeros_like(t)
     n_bands = len(activated_bands)
-    phi = ((t-P)/P)%1.0
-    fval = np.zeros_like(t) 
+
+    fval = np.zeros_like(t)
+    m0, amp0, c1, c2, P, E = unpack_theta(theta, n_bands, M_fit=M_fit, include_amp=True, coef_mode=coef_mode) 
     for i in range(len(bmasks)):
         mask = bmasks[ib]
         iband[mask] = i
-        t_ft, mag_ft, emag_ft = t[mask], mag[mask], emag[mask]
         theta_ft = [m0[i], amp0[i], c1, c2, P, E]
         # residual
-        fval[mask] = F(theta_ft, t_ft, M_fit, coef_mode=coef_mode)
+        fval[mask] = F(theta_ft, t[mask], M_fit, coef_mode=coef_mode)
 
     # Model template on uniform phase grid
-    m0, amp0, c1, c2, P, E = unpack_theta(theta, n_bands, M_fit=M_fit, include_amp=True, coef_mode=coef_mode)
     phi_grid, fval_grid = eval_on_grid(theta, n_bands, M_fit, n_grid=n_grid, coef_mode=coef_mode)
     
     amp0_eff = np.maximum(amp0)
     err_eff = np.sqrt(np.maximum(emag, params.ERR_FLOOR)**2 + (branch_err_frac * amp0_eff)**2)
 
+    phi = ((t-P)/P)%1.0
     z = (mag - fval) / err_eff
     z = np.clip(z, -8.0, 8.0)
 
