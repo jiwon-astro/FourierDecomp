@@ -168,7 +168,8 @@ def lightcurve_quality(sid, df_FD, n_grid=50, mode=None, selected_bands=None,
         if not flt in selected_bands: continue
         args_ft = (t[bm], mag[bm], emag[bm])
         theta_ft = np.array([m0s[i], amps[i], As, Qs, P, E], dtype=object)
-        q = _calc_quality_single(sid, args_ft, theta_ft, flt, n_grid=50, statistic='median')
+        q = _calc_quality_single(sid, args_ft, theta_ft, flt,
+                                 n_grid=n_grid, statistic=statistic)
         if q is not None: quality_list.append(q)
     return quality_list
 

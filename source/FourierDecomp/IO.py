@@ -326,10 +326,14 @@ def wire_globals(module, ls_data, df_ident,
 # =============================================================================
 # Gaia epoch photometry support (DR3 ECSV)
 # =============================================================================
-def gaia_ZP_cal(flux, ferr, band):
+def gaia_ZP_cal(flux, ferr, band, include_zp_systematic=False):
     """
     Zeropoint calibration (VEGAMAG), following Gaia documentation.
     Returns calibrated mag and mag_err.
+
+    The zero-point error is common to the band, not independent epoch noise.
+    It is therefore excluded from the per-epoch fitting weights by default and
+    may be added only when an absolute-magnitude uncertainty is required.
     """
     ZP = {'g': 25.6874, 'bp': 25.3385, 'rp': 24.7479}
     ZPerr = {'g': 0.0028, 'bp': 0.0028, 'rp': 0.0028}
@@ -337,11 +341,18 @@ def gaia_ZP_cal(flux, ferr, band):
     ferr = np.asarray(ferr, dtype=float)
     flux = np.maximum(flux, 1e-30)
     mag = -2.5 * np.log10(flux) + ZP[band]
-    mag_err = np.sqrt((-2.5 * ferr / flux) ** 2 + ZPerr[band] ** 2)
+    # dm/dF = -2.5 / (ln(10) F).  The previous 2.5*ferr/flux expression
+    # overestimated the random magnitude error by a factor ln(10).
+    mag_err_random = (2.5 / np.log(10.0)) * np.abs(ferr / flux)
+    if include_zp_systematic:
+        mag_err = np.sqrt(mag_err_random**2 + ZPerr[band]**2)
+    else:
+        mag_err = mag_err_random
     return mag, mag_err
 
 
-def extract_gaia_band_data(dl_dict, source_id, band, monitor=True):
+def extract_gaia_band_data(dl_dict, source_id, band, monitor=True,
+                           return_groups=False):
     """
     Extract (time, mag, mag_err) for a Gaia band from a loaded astropy.Table.
 
@@ -386,23 +397,54 @@ def extract_gaia_band_data(dl_dict, source_id, band, monitor=True):
 
     # Use flux errors to compute mag_err (more stable than raw mag_error columns when absent)
     _, mag_err = gaia_ZP_cal(flux, ferr, band)
-    return time.astype(float), np.asarray(mag, dtype=float), np.asarray(mag_err, dtype=float)
+    output = (time.astype(float), np.asarray(mag, dtype=float),
+              np.asarray(mag_err, dtype=float))
+    if not return_groups:
+        return output
+
+    # transit_id links G/BP/RP measurements from the same Gaia FoV transit.
+    # Preserve it for block bootstrap; fall back to band-local unique groups
+    # for legacy tables that do not contain the identifier.
+    if "transit_id" in tab.colnames:
+        groups = np.asarray(tab["transit_id"][~mask])
+    else:
+        groups = None
+    return (*output, groups)
 
 
-def gaia_epoch_arrays(dl_dict, source_id, filters=("g", "bp", "rp"), monitor=True):
+def gaia_epoch_arrays(dl_dict, source_id, filters=("g", "bp", "rp"), monitor=True,
+                      return_groups=False):
     """Return concatenated arrays t, mag, emag, band_label for FourierDecomp compatibility."""
-    t_all, m_all, e_all, b_all = [], [], [], []
+    t_all, m_all, e_all, b_all, group_all = [], [], [], [], []
+    groups_available = True
     for b in filters:
-        t, m, e = extract_gaia_band_data(dl_dict, source_id, b, monitor=monitor)
+        values = extract_gaia_band_data(
+            dl_dict, source_id, b, monitor=monitor,
+            return_groups=return_groups)
+        if return_groups:
+            t, m, e, groups = values
+        else:
+            t, m, e = values
         if len(t) == 0:
             continue
         t_all.append(t)
         m_all.append(m)
         e_all.append(e)
         b_all.append(np.array([b] * len(t), dtype=object))
+        if return_groups:
+            if groups is None:
+                groups_available = False
+            else:
+                group_all.append(groups)
     if not t_all:
-        return np.array([]), np.array([]), np.array([]), np.array([])
-    return (np.concatenate(t_all), np.concatenate(m_all), np.concatenate(e_all), np.concatenate(b_all))
+        empty = (np.array([]), np.array([]), np.array([]), np.array([]))
+        return (*empty, np.array([])) if return_groups else empty
+    output = (np.concatenate(t_all), np.concatenate(m_all),
+              np.concatenate(e_all), np.concatenate(b_all))
+    if return_groups:
+        groups = np.concatenate(group_all) if groups_available else None
+        return (*output, groups)
+    return output
 
 def ogle_epoch_arrays(data_dict, source_id, filters=("V","I"), monitor=True):
     tbl = data_dict[source_id]
@@ -458,7 +500,8 @@ def ztf_epoch_arrays(data_dict, source_id, filters=("zg", "zr", "zi"), monitor=T
 # unified epoch array getter for downstream code
 # =============================================================================
 
-def epoch_arrays(data_dict, source_id, mode = None, filters=None, monitor=False):
+def epoch_arrays(data_dict, source_id, mode = None, filters=None, monitor=False,
+                 return_groups=False):
     """
     Unified accessor to get (t, mag, emag, band) arrays for a given source_id.
 
@@ -478,10 +521,15 @@ def epoch_arrays(data_dict, source_id, mode = None, filters=None, monitor=False)
         filters = cfg.filters.tolist()
 
     if mode == "ogle":
+        if return_groups:
+            raise ValueError("return_groups is currently available only for Gaia")
         return ogle_epoch_arrays(data_dict, source_id, filters=filters, monitor=monitor)
     elif mode == "gaia":
-        return gaia_epoch_arrays(data_dict, int(source_id), filters=filters, monitor=monitor)
+        return gaia_epoch_arrays(data_dict, int(source_id), filters=filters,
+                                 monitor=monitor, return_groups=return_groups)
     elif mode == "ztf":
+        if return_groups:
+            raise ValueError("return_groups is currently available only for Gaia")
         return ztf_epoch_arrays(data_dict, int(source_id), filters=filters, monitor=monitor)
 
     raise ValueError("mode must be 'ogle', 'gaia' or 'ztf'")
@@ -539,5 +587,3 @@ def prepare_fitlc(sid, mode='gaia', ls_data=None, fitlc_path=None, workdir=None)
                        t=t, mag=mag, emag=emag, bands=bands)
     
     raise ValueError("Either fitlc_path or ls_data must be provided.")
-
-

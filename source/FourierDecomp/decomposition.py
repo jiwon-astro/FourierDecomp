@@ -9,6 +9,7 @@ from .IO import epoch_arrays, get_data_config
 from .quality import occupied_fraction
 from .LSQ import F, H, LSQ_fit, refit_m0_amp, chisq, unpack_theta, peak_to_peak_amplitude, _coef_mode, _harmonic_bounds, theta_to_AQ
 from .period_finder import robust_period_search
+from .uncertainty import adaptive_initial_lambda, adaptive_penalty_weights
 
 import warnings
 warnings.simplefilter("ignore")
@@ -78,10 +79,15 @@ def slope_penalty(theta, args, M_fit, activated_bands,coef_mode=None, n_grid=50,
     n_bands = len(activated_bands)
 
     fval = np.zeros_like(t)
+    active_obs = np.zeros(len(t), dtype=bool)
     m0, amp0, c1, c2, P, E = unpack_theta(theta, n_bands, M_fit=M_fit, include_amp=True, coef_mode=coef_mode) 
-    for i in range(len(bmasks)):
-        mask = bmasks[i]
+    # Only activated bands have an entry in m0/amp0.  The previous loop used
+    # all full-band masks and indexed m0 with the full-band index, which was
+    # incorrect for configurations such as OGLE (I band only).
+    for i, ib in enumerate(activated_bands):
+        mask = bmasks[ib]
         iband[mask] = i
+        active_obs[mask] = True
         theta_ft = [m0[i], amp0[i], c1, c2, P, E]
         # residual
         fval[mask] = F(theta_ft, t[mask], M_fit, coef_mode=coef_mode)
@@ -92,8 +98,9 @@ def slope_penalty(theta, args, M_fit, activated_bands,coef_mode=None, n_grid=50,
     amp0_eff = amp0.max()
     err_eff = np.sqrt(np.maximum(emag, params.ERR_FLOOR)**2 + (branch_err_frac * amp0_eff)**2)
 
-    phi = ((t-E)/P)%1.0
-    z = (mag - fval) / err_eff
+    phi = (((t-E)/P)%1.0)[active_obs]
+    z = ((mag - fval) / err_eff)[active_obs]
+    iband = iband[active_obs]
     z = np.clip(z, -8.0, 8.0)
 
     # Identify rising/descending branch
@@ -107,6 +114,8 @@ def slope_penalty(theta, args, M_fit, activated_bands,coef_mode=None, n_grid=50,
     # only loop over two branches
     for (pi, pf) in branches:
         interval = (pf - pi)%1.0
+        if interval <= np.finfo(float).eps:
+            continue
         in_branch = _cyclic_interval_mask(phi, pi, pf)
 
         if np.sum(in_branch) < min_branch_points:
@@ -153,9 +162,9 @@ def harmonics_penalty(theta, n_bands, M_fit, coef_mode=None, power=2.0):
     return np.sum(orders2 * (c1**2 + c2**2))
 
 def adjust_lambda(lam0, gmax, M_fit, N, lam_min = 1e-5, lam_max = 1e-1):
-    # Heuristic function to adjust regularization weight
-    lam = lam0 * (max(gmax, 0.05) / 0.12)**3 * (M_fit / 5.0)**2 * (30/max(N, 10))
-    return np.clip(lam, lam_min, lam_max)
+    # Continuous phase-support-aware regularization weight.
+    return adaptive_initial_lambda(
+        lam0, [gmax], N, M_fit, lam_min=lam_min, lam_max=lam_max)
 
 def residual_autocorr_score(theta, args, M_fit, activated_bands, coef_mode=None):
     # Barrt's condition - after a model has extracted the signal, the residuals should look like random noise
@@ -219,6 +228,10 @@ def _fit_wrapper(P0, args, M_fit, bounds_full, activated_bands, phase_gaps,
     
     # initial parameter - band별 계산 후 평균
     phase_flag = (phase_gaps > 0.05)
+    if not params.PHASE_GAP_NONLINEAR_INIT:
+        # alpha/beta initialization is linear; avoid a redundant per-band
+        # nonlinear solve unless a legacy comparison explicitly requests it.
+        phase_flag = None
     N_fts = np.sum(bmask, axis = 1); N_eff = N_fts.max()
     lam = params.lam0
     if adaptive_lam:
@@ -228,6 +241,31 @@ def _fit_wrapper(P0, args, M_fit, bounds_full, activated_bands, phase_gaps,
     theta0 = LSQ_fit(P0, args, M_fit, activated_bands, phase_flag=phase_flag, 
                         opt_method = params.opt_method, lam = lam, quality_weight=params.quality_weight)
 
+    # -------------------------------------------------------------------------
+    # Freeze phase-gap / steep-branch adaptation once per candidate order
+    # -------------------------------------------------------------------------
+    if adaptive_lam:
+        penalty_weights = adaptive_penalty_weights(
+            theta0, args, M_fit, activated_bands, phase_gaps,
+            coef_mode=coef_mode,
+            lam_spike=params.lam_spike,
+            lam_h=params.lam_h,
+            lam_slope=params.lam_sl)
+        lam_spike_eff = penalty_weights.lam_spike
+        lam_h_eff = penalty_weights.lam_h
+        lam_sl_eff = penalty_weights.lam_slope
+        if verbose:
+            print(
+                "adaptive penalties = "
+                f"spike:{lam_spike_eff:.3g}, harmonic:{lam_h_eff:.3g}, "
+                f"slope:{lam_sl_eff:.3g} / "
+                f"steepness:{penalty_weights.steepness:.2f}, "
+                f"steep_support:{penalty_weights.steep_support:.2f}")
+    else:
+        lam_spike_eff = params.lam_spike
+        lam_h_eff = params.lam_h
+        lam_sl_eff = params.lam_sl
+
     P_init, E_init = theta0[-2], theta0[-1]
     if period_fit:
         # P와 E의 bound를 theta0
@@ -235,20 +273,32 @@ def _fit_wrapper(P0, args, M_fit, bounds_full, activated_bands, phase_gaps,
     else: bounds_full[-2] = (P_init, P_init)
     bounds_full[-1] = (E_init - P_init, E_init + P_init)     # E 범위
 
+    # -------------------------------------------------------------------------
     # 2. Global minimization
+    # -------------------------------------------------------------------------
     if use_optim:
-        res = minimize(fit_objective, theta0,
-                    args=(args, M_fit, n_dim, activated_bands, coef_mode,
-                          params.lam_spike, params.lam_h, params.n_grid, params.power, params.branch_err_frac),
-                    method='L-BFGS-B',
-                    bounds=bounds_full)
+        # Use keyword arguments through a local closure.  The previous
+        # positional call omitted lam_sl and shifted n_grid/power arguments.
+        def objective_local(theta):
+            return fit_objective(
+                theta, args, M_fit, n_dim, activated_bands,
+                coef_mode=coef_mode,
+                lam_spike=lam_spike_eff,
+                lam_h=lam_h_eff,
+                lam_sl=lam_sl_eff,
+                n_grid=params.n_grid,
+                power=params.power,
+                branch_err_frac=params.branch_err_frac)
+
+        res = minimize(objective_local, theta0, method='L-BFGS-B',
+                       bounds=bounds_full)
         
         if res.success:
             return res.x, res.fun #, M_fit, n_dim
         
     # optimization failure
     chi2_init = fit_objective(theta0, args, M_fit=M_fit, n_dim=n_dim, activated_bands=activated_bands, coef_mode=coef_mode,
-                              lam_spike=params.lam_spike, lam_h=params.lam_h, lam_sl=params.lam_sl,
+                              lam_spike=lam_spike_eff, lam_h=lam_h_eff, lam_sl=lam_sl_eff,
                               n_grid=params.n_grid, power=params.power, branch_err_frac=params.branch_err_frac)
     return theta0, chi2_init #, M_fit, n_dim
 
@@ -280,7 +330,7 @@ def calculate_m0_amp(args, sigma = 3.0, maxiter = 5):
             for _ in range(maxiter):
                 resmask = sigma_clip(mag_ft - m0_ft, sigma=sigma, masked=True).mask
                 m0_ft = np.average(mag_ft[~resmask], weights = w_ft[~resmask])
-                Amp_ft = np.diff(np.percentile(mag_ft[~resmask], [1, 99])) 
+                Amp_ft = np.diff(np.percentile(mag_ft[~resmask], [1, 99]))[0]
                 #Amp_ft = max(mag_ft[~resmask]) - min(mag_ft[~resmask])
                 n_curr = (~resmask).sum()
                 if n_curr<n_prev: n_prev = n_curr
@@ -341,7 +391,8 @@ def select_order(P0, args, activated_bands, phase_gaps, M_trunc, tie_breaker="mi
 # === Main Function ===
 def fourier_decomp(sid, mode='ogle', init='lasso',
                    period_fit=False, use_optim=False, adaptive_lam=False, use_refit=False,
-                   verbose=False, plot_LS=False, K=None, harmonics=None):
+                   verbose=False, plot_LS=False, K=None, harmonics=None,
+                   epoch_data=None):
     # Load data
     if mode is None: mode = get_data_config().mode
     cfg = get_data_config(mode)
@@ -365,7 +416,16 @@ def fourier_decomp(sid, mode='ogle', init='lasso',
         sid_mask = (df_ident['ID'] == sid)
         pulsation = 'NaN'
 
-    t, mag, emag, bands = epoch_arrays(ls_data, sid, mode=mode)
+    # Optional epoch_data keeps the public API backward compatible while
+    # allowing bootstrap replicates to run without mutating module globals.
+    if epoch_data is None:
+        t, mag, emag, bands = epoch_arrays(ls_data, sid, mode=mode)
+    else:
+        if len(epoch_data) != 4:
+            raise ValueError("epoch_data must be (t, mag, emag, bands)")
+        t, mag, emag, bands = [np.asarray(x) for x in epoch_data]
+        if not (len(t) == len(mag) == len(emag) == len(bands)):
+            raise ValueError("epoch_data arrays must have identical lengths")
     bmask = [(bands == band) for band in filters]
     args = (t, mag, emag, bmask)
 
@@ -515,7 +575,8 @@ def fourier_decomp(sid, mode='ogle', init='lasso',
         N[i] = len(t_ft)
         
         w_ft = 1 / np.maximum(emag_ft, params.ERR_FLOOR)**2
-        # photometric error (w/o genuine pulsation)
+        # Weighted total scatter about the band mean.  This contains the
+        # genuine pulsation signal and is not a photometric-error estimate.
         dm_ft = mag_ft-m0_data[i]
         sig[i] = np.sqrt(np.average(dm_ft**2, weights=w_ft))
 
@@ -574,7 +635,42 @@ def fourier_decomp(sid, mode='ogle', init='lasso',
             delta_phi = np.diff(phase_pk)[0]
             phi_rise = np.min([1-delta_phi, delta_phi])
         """
-    # ToDo:  after amplitude refinement, chi2 value should be reevaluated!!
+    # -------------------------------------------------------------------------
+    # Final post-refit goodness of fit
+    # -------------------------------------------------------------------------
+    # A_fit/Q_fit is peak-to-peak normalized above, and amp_out carries the
+    # corresponding scale.  Re-evaluate chi2 after the band-wise amplitude
+    # refinement so the stored value describes the actual returned model.
+    theta_eval = np.hstack([
+        m0_out[activated_bands], amp_out[activated_bands],
+        A_fit, Q_fit, P, E])
+    n_dim_eval = 2 * n_bands + 2 * M_fit_final + 2
+    chi2_opt_final = chisq(
+        theta_eval, *args, M_fit_final, n_dim_eval,
+        activated_bands, coef_mode='AQ')
+
+    # Recalculate phase support and the objective for the returned model.  The
+    # previous fobj referred to the pre-refit model selected during order scan.
+    phase_gaps = np.asarray([
+        phase_gap_score(t[mask], P, M_fit=M_fit_final) for mask in bmask])
+    if adaptive_lam:
+        final_weights = adaptive_penalty_weights(
+            theta_eval, args, M_fit_final, activated_bands, phase_gaps,
+            coef_mode='AQ', lam_spike=params.lam_spike,
+            lam_h=params.lam_h, lam_slope=params.lam_sl)
+        lam_spike_final = final_weights.lam_spike
+        lam_h_final = final_weights.lam_h
+        lam_sl_final = final_weights.lam_slope
+    else:
+        lam_spike_final = params.lam_spike
+        lam_h_final = params.lam_h
+        lam_sl_final = params.lam_sl
+    obj_opt_final = fit_objective(
+        theta_eval, args, M_fit_final, n_dim_eval, activated_bands,
+        coef_mode='AQ', lam_spike=lam_spike_final, lam_h=lam_h_final,
+        lam_sl=lam_sl_final, n_grid=params.n_grid, power=params.power,
+        branch_err_frac=params.branch_err_frac)
+
     if verbose:
         print(f'ID = {sid} / Final M_fit = {M_fit_final} / CHI2 = {chi2_opt_final:.2f} / F_obj = {obj_opt_final:.2f} / rrms = {rms[0]/sig[0]:.4f} / P = {P:.6f} days')
 

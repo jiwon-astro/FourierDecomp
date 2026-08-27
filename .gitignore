@@ -5,6 +5,7 @@ __pycache__/
 
 # Distribution / packaging
 .Python
+tests/
 build/
 develop-eggs/
 dist/
@@ -43,3 +44,13 @@ Thumbs.db
 venv/
 ENV/
 env/
+
+# -----------------------------------------------------------------------------
+# Codex / local agent metadata
+# -----------------------------------------------------------------------------
+.codex/
+.agents/
+AGENTS.md
+PROJECT_MEMORY.md
+codex-clipboard-*
+_codex_*/

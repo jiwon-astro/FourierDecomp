@@ -346,14 +346,34 @@ def LSQ_fit(P0, args, M_fit, activated_bands, opt_method='lsq', quality_weight=F
 
         w_band = 1.0
         if quality_weight:
-            # evaluate residual 
+            # -----------------------------------------------------------------
+            # Residual quality + continuous phase-support weight
+            # -----------------------------------------------------------------
+            # The residual floor is relative to the band amplitude, preventing
+            # a nearly interpolating high-order fit from dominating the shared
+            # alpha/beta template.  Poor phase coverage is downweighted rather
+            # than triggering another nonlinear fit for the same band.
             theta_ft = [m0_ft, 1, alpha_ft, beta_ft, P0, E0] 
             fval = F(theta_ft, t_ft, M_fit, coef_mode='ab')
             resid_ft = mag_ft - fval
             rms = np.sqrt(np.average(resid_ft**2, weights=w_ft))
-            w_band = 1/rms**2
+            rms_floor = max(params.ERR_FLOOR,
+                            params.BAND_WEIGHT_FLOOR * scale,
+                            float(np.nanmedian(np.maximum(emag_ft, params.ERR_FLOOR))))
+
+            phase = np.sort(((t_ft - E0) / P0) % 1.0)
+            gaps = np.diff(np.r_[phase, phase[0] + 1.0])
+            gmax = float(np.max(gaps)) if len(phase) else 1.0
+            gap_support = np.clip((1.0 - gmax) / 0.90, 0.10, 1.0)
+            sample_support = np.clip(len(t_ft) / max(2 * M_fit + 5, 1),
+                                     0.20, 1.0)
+            w_band = gap_support * sample_support / max(rms, rms_floor)**2
         
-        if (not phase_flag[ib]) or (phase_flag[ib] and res_success):
+        phase_fit_usable = (
+            phase_flag is None or
+            (not phase_flag[ib]) or
+            (phase_flag[ib] and res_success))
+        if phase_fit_usable:
             # phase_flag = False -> LSQ fit only (its sufficient)
             # phase_flag = True -> secondary fitting with minimization -> reliable peak-to-peak amplitude from best fit solution
             alpha_accum += w_band * (alpha_ft / scale)

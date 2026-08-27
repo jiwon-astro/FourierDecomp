@@ -51,6 +51,32 @@ BIC_TOL_WEIGHT = 0.1 # tol = WEIGHT *sqrt(2νeff)max(1,χ2_red_best)
 RES_CORR_WEIGHT = 3 # residual unit-lag autocorrelation weight (for order selection)
 tie_breaker = "minimum" # selection rule for M_fits with similar BIC values
 
+# -----------------------------------------------------------------------------
+# Phase-gap / steep-branch stability controls
+# -----------------------------------------------------------------------------
+# The old implementation launched an additional nonlinear optimization for
+# every band with a phase gap.  The alpha/beta initialization is already a
+# linear problem, and the global optimizer follows it, so that repeated step is
+# disabled by default.  It can be re-enabled for an explicit legacy comparison.
+PHASE_GAP_NONLINEAR_INIT = False
+
+# Continuous phase-support scale used by the adaptive regularization.
+GAP_REFERENCE = 0.12
+GAP_POWER = 2.0
+N_EPOCH_REFERENCE = 30
+
+# A normalized sinusoid has max |dm/dphi| ~ pi.  Values above this reference
+# indicate a genuinely steep branch.  When that branch is observed, harmonic
+# smoothing is relaxed instead of flattening the Cepheid morphology.
+STEEP_SLOPE_REFERENCE = 4.0
+STEEP_SLOPE_SCALE = 8.0
+STEEP_GRID_SIZE = 128
+STEEP_SUPPORT_RADIUS = 1
+STEEP_HARMONIC_RELIEF = 0.70
+
+# Prevent one very small residual RMS from dominating the multi-band stack.
+BAND_WEIGHT_FLOOR = 0.05
+
 # --- fitting range ---
 # Peak-to-peak amplitude range for each band [mag]
 Amin, Amax = 0.05, 2
