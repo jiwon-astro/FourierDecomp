@@ -4,8 +4,8 @@ from . import params
 from .IO import phot_names, epoch_arrays, get_data_config
 from .uncertainty import conditional_curve_uncertainty
 
-def compute_phase(t, P):
-    return (t / P) % 1.0
+def compute_phase(t, P, E=0.0):
+    return ((t - E) / P) % 1.0
 
 def phase_gap_score(t, P, M_fit=None): 
     if M_fit is None: M_fit = params.M_MAX
@@ -19,8 +19,8 @@ def phase_gap_score(t, P, M_fit=None):
     #return gaps.max() > threshold
 
 # Expand phased light curve (arbitary phase range)
-def expand_light_curve(t, flux, flux_err,  period, phase_range = (0,1)):
-    original_phase = compute_phase(t, period)
+def expand_light_curve(t, flux, flux_err,  period, phase_range = (0,1), E=0.0):
+    original_phase = compute_phase(t, period, E=E)
     
     #phase range [0,1) -> [n,n+1)
     phase_i, phase_f = phase_range
@@ -169,7 +169,7 @@ def plot_lc_conditional_ci(sid, P, E, M_fit, mode='ogle',
 
         phase_obs, mag_obs, emag_obs = expand_light_curve(
             t_band, mag_band, emag_band, P,
-            phase_range=(0.0, float(phase_max)))
+            phase_range=(0.0, float(phase_max)), E=E)
         ax.errorbar(
             phase_obs, mag_obs, yerr=emag_obs, ls='None', color=color,
             marker=marker, ms=3, lw=0.7, alpha=0.75, zorder=3,
