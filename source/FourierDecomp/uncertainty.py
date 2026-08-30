@@ -394,6 +394,285 @@ def conditional_curve_uncertainty(t, mag, emag, P, E, M_fit,
 
 
 # -----------------------------------------------------------------------------
+# Joint shared-morphology conditional covariance
+# -----------------------------------------------------------------------------
+
+def conditional_shared_morphology_covariance(
+        t, mag, emag, bands, nominal_record, selected_filters,
+        P, E, M_fit, reference_band=None, err_floor=None, robust=True):
+    """HC3 covariance for one morphology shared by all selected bands.
+
+    The reference-band harmonic coefficients carry the absolute shape scale.
+    Every other band has a positive relative amplitude ``exp(eta_band)`` and
+    its own mean magnitude.  This removes the otherwise exact degeneracy
+    between a common shape scale and the band amplitudes.
+
+    The covariance is a local, fixed-period/order approximation evaluated at
+    the final returned multi-band model.  It does not include period aliases,
+    order/regularization selection, or transit-correlated errors.
+    """
+    if err_floor is None:
+        err_floor = params.ERR_FLOOR
+
+    t = np.asarray(t, dtype=float)
+    mag = np.asarray(mag, dtype=float)
+    emag = np.asarray(emag, dtype=float)
+    bands = np.asarray(bands).astype(str)
+    selected_filters = [str(band) for band in selected_filters]
+    if not selected_filters:
+        raise ValueError("selected_filters must contain at least one band")
+
+    if reference_band is None:
+        reference_band = selected_filters[0]
+    reference_band = str(reference_band)
+    if reference_band not in selected_filters:
+        raise ValueError("reference_band must be in selected_filters")
+    band_names = [reference_band] + [
+        band for band in selected_filters if band != reference_band]
+
+    keep = (
+        np.isfinite(t) & np.isfinite(mag) & np.isfinite(emag) &
+        (emag >= 0) & np.isin(bands, band_names)
+    )
+    t, mag, emag, bands = t[keep], mag[keep], emag[keep], bands[keep]
+    if any(not np.any(bands == band) for band in band_names):
+        raise ValueError("Every selected band must contain observations")
+
+    M_fit = int(M_fit)
+    A = np.asarray([
+        nominal_record[f"A{order}"] for order in range(1, M_fit + 1)
+    ], dtype=float)
+    Q = np.asarray([
+        nominal_record[f"Q{order}"] for order in range(1, M_fit + 1)
+    ], dtype=float)
+    m0 = np.asarray([
+        nominal_record[f"m0_{band}"] for band in band_names
+    ], dtype=float)
+    amplitude = np.asarray([
+        nominal_record[f"amp_{band}"] for band in band_names
+    ], dtype=float)
+    if not np.all(np.isfinite(np.r_[A, Q, m0, amplitude])):
+        raise ValueError("nominal_record contains non-finite model parameters")
+    if np.any(amplitude <= 0):
+        raise ValueError("Band amplitudes must be positive")
+
+    # The common normalized shape is converted to absolute reference-band
+    # Fourier coefficients.  Other bands are represented by amplitude ratios.
+    alpha = amplitude[0] * A * np.cos(Q)
+    beta = amplitude[0] * A * np.sin(Q)
+    coefficients = np.empty(2 * M_fit, dtype=float)
+    coefficients[0::2] = alpha
+    coefficients[1::2] = beta
+    log_scale = np.log(amplitude[1:] / amplitude[0])
+    theta = np.r_[m0, log_scale, coefficients]
+
+    n_bands = len(band_names)
+    n_scale = n_bands - 1
+    coefficient_start = n_bands + n_scale
+    band_index = {band: index for index, band in enumerate(band_names)}
+    obs_band_index = np.asarray([band_index[band] for band in bands], dtype=int)
+
+    design_harmonic = cs_matrix(t, P, E, M_fit)[:, 1:]
+    shape_reference = design_harmonic @ coefficients
+    scales = np.ones(n_bands, dtype=float)
+    if n_scale:
+        scales[1:] = np.exp(log_scale)
+    prediction = m0[obs_band_index] + scales[obs_band_index] * shape_reference
+
+    # Jacobian of m0_band + scale_band * shared_shape.  Using log-scales keeps
+    # all sampled relative band amplitudes positive.
+    jacobian = np.zeros((len(t), len(theta)), dtype=float)
+    jacobian[np.arange(len(t)), obs_band_index] = 1.0
+    for band_i in range(1, n_bands):
+        band_mask = obs_band_index == band_i
+        jacobian[band_mask, n_bands + band_i - 1] = (
+            scales[band_i] * shape_reference[band_mask])
+    jacobian[:, coefficient_start:] = (
+        scales[obs_band_index, None] * design_harmonic)
+
+    sigma = np.maximum(emag, err_floor)
+    jacobian_w = jacobian / sigma[:, None]
+    residual_w = (mag - prediction) / sigma
+    if len(t) <= jacobian_w.shape[1]:
+        raise ValueError("Insufficient epochs for joint shared-morphology HC3")
+
+    bread = np.linalg.pinv(jacobian_w.T @ jacobian_w, hermitian=True)
+    leverage = np.sum((jacobian_w @ bread) * jacobian_w, axis=1)
+    if robust:
+        adjusted = residual_w / np.maximum(1.0 - leverage, 1e-6)
+        meat = jacobian_w.T @ ((adjusted**2)[:, None] * jacobian_w)
+        covariance = bread @ meat @ bread
+        covariance_kind = "joint HC3"
+    else:
+        dof = max(len(t) - jacobian_w.shape[1], 1)
+        covariance = (np.sum(residual_w**2) / dof) * bread
+        covariance_kind = "joint classical"
+
+    parameter_names = [f"m0_{band}" for band in band_names]
+    parameter_names += [f"log_scale_{band}_over_{reference_band}"
+                        for band in band_names[1:]]
+    for order in range(1, M_fit + 1):
+        parameter_names += [f"alpha{order}_{reference_band}",
+                            f"beta{order}_{reference_band}"]
+
+    return {
+        "theta": theta,
+        "covariance": covariance,
+        "standard_error": np.sqrt(np.maximum(np.diag(covariance), 0.0)),
+        "parameter_names": tuple(parameter_names),
+        "band_names": tuple(band_names),
+        "reference_band": reference_band,
+        "n_bands": n_bands,
+        "coefficient_start": coefficient_start,
+        "condition_number": float(np.linalg.cond(jacobian_w)),
+        "max_leverage": float(np.max(leverage)),
+        "max_leverage_by_band": {
+            band: float(np.max(leverage[bands == band])) for band in band_names
+        },
+        "dof": int(len(t) - jacobian_w.shape[1]),
+        "covariance_kind": covariance_kind,
+        "prediction": prediction,
+        "residual_w": residual_w,
+    }
+
+
+def _draw_shared_morphology_parameters(conditional_fit, n_draws,
+                                       random_state):
+    covariance = np.asarray(conditional_fit["covariance"], dtype=float)
+    covariance = 0.5 * (covariance + covariance.T)
+    eigval, eigvec = np.linalg.eigh(covariance)
+    covariance_psd = (
+        eigvec * np.maximum(eigval, 0.0)
+    ) @ eigvec.T
+    rng = np.random.default_rng(random_state)
+    return rng.multivariate_normal(
+        conditional_fit["theta"], covariance_psd, size=int(n_draws))
+
+
+def conditional_shared_invariant_uncertainty(
+        t, mag, emag, bands, nominal_record, selected_filters,
+        P, E, M_fit, reference_band=None, n_draws=4000,
+        random_state=0, err_floor=None, robust=True,
+        conditional_fit=None):
+    """Propagate joint shared-morphology HC3 into Fourier invariants."""
+    if conditional_fit is None:
+        conditional_fit = conditional_shared_morphology_covariance(
+            t, mag, emag, bands, nominal_record, selected_filters,
+            P=P, E=E, M_fit=M_fit, reference_band=reference_band,
+            err_floor=err_floor, robust=robust)
+    draws = _draw_shared_morphology_parameters(
+        conditional_fit, n_draws, random_state)
+    coefficient_start = int(conditional_fit["coefficient_start"])
+    coefficients = draws[:, coefficient_start:]
+
+    invariants = []
+    for coefficient_draw in coefficients:
+        A, Q = ab_to_AQ(
+            coefficient_draw[0::2], coefficient_draw[1::2])
+        invariants.append(fourier_invariants(A, Q))
+    summary = summarize_invariant_replicates(invariants)
+    summary["conditional_fit"] = conditional_fit
+    return summary
+
+
+def conditional_shared_curve_uncertainty(
+        t, mag, emag, bands, nominal_record, selected_filters,
+        P, E, M_fit, reference_band=None, phase_grid=None,
+        n_draws=4000, random_state=0, err_floor=None, robust=True,
+        conditional_fit=None, return_draws=False):
+    """Return joint-HC3 curve intervals with one morphology for all bands."""
+    if conditional_fit is None:
+        conditional_fit = conditional_shared_morphology_covariance(
+            t, mag, emag, bands, nominal_record, selected_filters,
+            P=P, E=E, M_fit=M_fit, reference_band=reference_band,
+            err_floor=err_floor, robust=robust)
+    if phase_grid is None:
+        phase_grid = np.linspace(0.0, 1.0, 400, endpoint=False)
+    phase_grid = np.asarray(phase_grid, dtype=float)
+    if phase_grid.ndim != 1 or phase_grid.size < 2:
+        raise ValueError("phase_grid must be a one-dimensional array")
+
+    draws = _draw_shared_morphology_parameters(
+        conditional_fit, n_draws, random_state)
+    n_bands = int(conditional_fit["n_bands"])
+    coefficient_start = int(conditional_fit["coefficient_start"])
+    band_names = conditional_fit["band_names"]
+    m0_draws = draws[:, :n_bands]
+    scale_draws = np.ones((len(draws), n_bands), dtype=float)
+    if n_bands > 1:
+        scale_draws[:, 1:] = np.exp(draws[:, n_bands:coefficient_start])
+    coefficient_draws = draws[:, coefficient_start:]
+
+    t_grid = float(E) + float(P) * phase_grid
+    design_grid = cs_matrix(t_grid, P, E, M_fit)[:, 1:]
+    shared_shape_draws = coefficient_draws @ design_grid.T
+    theta0 = np.asarray(conditional_fit["theta"], dtype=float)
+    m0_nominal = theta0[:n_bands]
+    scale_nominal = np.ones(n_bands, dtype=float)
+    if n_bands > 1:
+        scale_nominal[1:] = np.exp(theta0[n_bands:coefficient_start])
+    shape_nominal = design_grid @ theta0[coefficient_start:]
+
+    # Separate morphology from the reference-band amplitude.  The decomposition
+    # stores a unit peak-to-peak common shape, so normalize every joint-HC3 draw
+    # in the same way before summarizing the phasewise morphology uncertainty.
+    draw_percentiles = np.nanpercentile(
+        shared_shape_draws, [1.0, 99.0], axis=1)
+    draw_p2p = draw_percentiles[1] - draw_percentiles[0]
+    valid_draw = np.isfinite(draw_p2p) & (draw_p2p > 1e-12)
+    normalized_shape_draws = np.full_like(shared_shape_draws, np.nan)
+    normalized_shape_draws[valid_draw] = (
+        shared_shape_draws[valid_draw] / draw_p2p[valid_draw, None])
+    nominal_percentiles = np.nanpercentile(shape_nominal, [1.0, 99.0])
+    nominal_p2p = nominal_percentiles[1] - nominal_percentiles[0]
+    normalized_shape_nominal = shape_nominal / max(nominal_p2p, 1e-12)
+    mq025, mq16, mq50, mq84, mq975 = np.nanpercentile(
+        normalized_shape_draws, [2.5, 16.0, 50.0, 84.0, 97.5], axis=0)
+    morphology_summary = {
+        "nominal": normalized_shape_nominal,
+        "median": mq50,
+        "q025": mq025,
+        "q16": mq16,
+        "q84": mq84,
+        "q975": mq975,
+        "valid_fraction": float(np.mean(valid_draw)),
+    }
+
+    band_summary = {}
+    curve_draws_by_band = {}
+    for band_i, band in enumerate(band_names):
+        curve_draws = (
+            m0_draws[:, band_i, None] +
+            scale_draws[:, band_i, None] * shared_shape_draws)
+        q025, q16, q50, q84, q975 = np.nanpercentile(
+            curve_draws, [2.5, 16.0, 50.0, 84.0, 97.5], axis=0)
+        band_summary[band] = {
+            "nominal": m0_nominal[band_i] +
+                       scale_nominal[band_i] * shape_nominal,
+            "median": q50,
+            "q025": q025,
+            "q16": q16,
+            "q84": q84,
+            "q975": q975,
+        }
+        if return_draws:
+            curve_draws_by_band[band] = curve_draws
+
+    result = {
+        "phase": phase_grid,
+        "bands": band_summary,
+        "morphology": morphology_summary,
+        "conditional_fit": conditional_fit,
+        "n_draws": int(n_draws),
+    }
+    if return_draws:
+        result["curve_draws"] = curve_draws_by_band
+        result["morphology_draws"] = normalized_shape_draws
+        result["theta_draws"] = draws
+    return result
+
+
+# -----------------------------------------------------------------------------
 # Full-pipeline epoch bootstrap
 # -----------------------------------------------------------------------------
 

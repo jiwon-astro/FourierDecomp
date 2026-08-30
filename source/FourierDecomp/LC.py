@@ -2,7 +2,9 @@ import numpy as np
 import matplotlib.pyplot as plt
 from . import params
 from .IO import phot_names, epoch_arrays, get_data_config
-from .uncertainty import conditional_curve_uncertainty
+from .uncertainty import (
+    conditional_curve_uncertainty, conditional_shared_curve_uncertainty,
+)
 
 def compute_phase(t, P, E=0.0):
     return ((t - E) / P) % 1.0
@@ -111,13 +113,15 @@ def plot_lc_conditional_ci(sid, P, E, M_fit, mode='ogle',
                            selected_filters=None, phase_max=2,
                            n_grid=400, n_draws=4000, random_state=0,
                            robust=True, epoch_data=None,
-                           conditional_fits=None, savepath=None):
+                           conditional_fits=None, nominal_record=None,
+                           shared_conditional_fit=None, savepath=None):
     """Plot fixed-period/order HC3 confidence bands for fitted mean curves.
 
-    This follows :func:`plot_lc`, but independently refits the linear Fourier
-    coefficients in each displayed band at fixed ``P``, ``E`` and ``M_fit``.
-    The shaded regions are 68% and 95% confidence intervals for the fitted
-    mean curve.  They are not photometric prediction intervals and do not
+    With ``nominal_record``, all selected bands use one joint shared morphology
+    and band-specific mean/amplitude parameters, matching the decomposition
+    model.  A single-band call without ``nominal_record`` retains the legacy
+    conditional linear fit.  The shaded regions are confidence intervals for
+    the fitted mean curve, not photometric prediction intervals, and do not
     include period aliases or model/order selection uncertainty.
 
     Returns
@@ -155,6 +159,20 @@ def plot_lc_conditional_ci(sid, P, E, M_fit, mode='ogle',
     axes[0].set_title(f'{sid}', loc='left', fontsize=18)
     diagnostics = {}
 
+    shared_ci = None
+    if nominal_record is not None:
+        shared_ci = conditional_shared_curve_uncertainty(
+            t, mag, emag, bands, nominal_record, selected_filters,
+            P=P, E=E, M_fit=M_fit,
+            reference_band=selected_filters[0], phase_grid=phase_grid,
+            n_draws=n_draws, random_state=random_state, robust=robust,
+            conditional_fit=shared_conditional_fit)
+        diagnostics["shared_fit"] = shared_ci["conditional_fit"]
+        diagnostics["morphology"] = shared_ci["morphology"]
+    elif len(selected_filters) > 1:
+        raise ValueError(
+            "nominal_record is required for a multi-band shared-morphology CI")
+
     for panel, (ax, band) in enumerate(zip(axes, selected_filters)):
         mask = bands == band
         if not np.any(mask):
@@ -175,15 +193,18 @@ def plot_lc_conditional_ci(sid, P, E, M_fit, mode='ogle',
             marker=marker, ms=3, lw=0.7, alpha=0.75, zorder=3,
             label=f'{band} epochs')
 
-        precomputed_fit = None
-        if conditional_fits is not None:
-            precomputed_fit = conditional_fits.get(band)
-        band_ci = conditional_curve_uncertainty(
-            t_band, mag_band, emag_band, P=P, E=E, M_fit=M_fit,
-            phase_grid=phase_grid, n_draws=n_draws,
-            random_state=int(random_state) + panel,
-            robust=robust, return_draws=False,
-            conditional_fit=precomputed_fit)
+        if shared_ci is not None:
+            band_ci = shared_ci["bands"][band]
+        else:
+            precomputed_fit = None
+            if conditional_fits is not None:
+                precomputed_fit = conditional_fits.get(band)
+            band_ci = conditional_curve_uncertainty(
+                t_band, mag_band, emag_band, P=P, E=E, M_fit=M_fit,
+                phase_grid=phase_grid, n_draws=n_draws,
+                random_state=int(random_state) + panel,
+                robust=robust, return_draws=False,
+                conditional_fit=precomputed_fit)
         diagnostics[band] = band_ci
 
         n_cycles = max(int(np.ceil(float(phase_max))), 1)
@@ -195,17 +216,20 @@ def plot_lc_conditional_ci(sid, P, E, M_fit, mode='ogle',
             return np.tile(np.asarray(values), n_cycles)[keep]
 
         phase_plot = phase_plot[keep]
+        ci_prefix = 'joint HC3' if shared_ci is not None else 'conditional'
         ax.fill_between(
             phase_plot, repeat_curve(band_ci['q025']),
             repeat_curve(band_ci['q975']), color='tab:blue', alpha=0.12,
-            linewidth=0, label='95% conditional CI', zorder=1)
+            linewidth=0, label=f'95% {ci_prefix} CI', zorder=1)
         ax.fill_between(
             phase_plot, repeat_curve(band_ci['q16']),
             repeat_curve(band_ci['q84']), color='tab:blue', alpha=0.28,
-            linewidth=0, label='68% conditional CI', zorder=2)
+            linewidth=0, label=f'68% {ci_prefix} CI', zorder=2)
         ax.plot(
             phase_plot, repeat_curve(band_ci['nominal']), color='black',
-            lw=1.4, label='conditional fit', zorder=4)
+            lw=1.4,
+            label=('shared nominal fit' if shared_ci is not None
+                   else 'conditional fit'), zorder=4)
 
         finite_bounds = np.r_[band_ci['q025'], band_ci['q975'], mag_band]
         finite_bounds = finite_bounds[np.isfinite(finite_bounds)]
@@ -214,7 +238,10 @@ def plot_lc_conditional_ci(sid, P, E, M_fit, mode='ogle',
             margin = max(0.08 * (ymax - ymin), 0.03)
             ax.set_ylim(ymax + margin, ymin - margin)
 
-        fit = band_ci['conditional_fit']
+        fit = (shared_ci['conditional_fit'] if shared_ci is not None
+               else band_ci['conditional_fit'])
+        max_leverage = fit.get('max_leverage_by_band', {}).get(
+            band, fit['max_leverage'])
         ax.text(
             0.01, 0.05, f'P={float(P):.6f} d',
             transform=ax.transAxes, ha='left', va='bottom')
@@ -223,7 +250,7 @@ def plot_lc_conditional_ci(sid, P, E, M_fit, mode='ogle',
             transform=ax.transAxes, ha='left', va='top')
         ax.text(
             0.99, 0.05,
-            f"{fit['covariance_kind']}  max h={fit['max_leverage']:.2f}  "
+            f"{fit['covariance_kind']}  max h={max_leverage:.2f}  "
             f"cond={fit['condition_number']:.1e}",
             transform=ax.transAxes, ha='right', va='bottom', fontsize=8)
         ax.set_ylabel('Magnitude\n[mag]')
