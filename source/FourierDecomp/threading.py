@@ -1,11 +1,23 @@
-import importlib
-from multiprocessing import Pool, Lock, Manager, get_context
+from multiprocessing import Manager, get_context
+from pathlib import Path
 from tqdm.notebook import tqdm
 import csv
 import time
 
 from .params import period_fit, use_optim, adaptive_lam, use_refit, mode_default, init
-from .IO import get_data_config, build_fd_header
+from .IO import build_fd_header, epoch_arrays
+from .catalog import (
+    FD_ERROR_COLUMNS,
+    FD_QA_COLUMNS,
+    assess_nominal_fit_quality,
+    build_fd_error_header,
+    compute_minimal_hc3_errors,
+    error_values,
+    make_qa_record,
+    merge_qa_records,
+    nan_error_record,
+    qa_values,
+)
 
 def _init_worker(ls_data, df_ident, df_rrfit, templates):
     """Runs once per worker process."""
@@ -16,10 +28,110 @@ def _init_worker(ls_data, df_ident, df_rrfit, templates):
     decomp_mod.templates = templates
 
 
-def _worker_call(args):
-    """Picklable wrapper for imap."""
-    sid, mode, init, period_fit, use_optim, adaptive_lam, use_refit, verbose = args
+def _header_from_file(path):
+    with open(path, "r", newline="") as handle:
+        line = handle.readline().strip()
+    return line.split()
+
+
+def _ensure_output_header(path, header):
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    if path.exists():
+        existing = _header_from_file(path)
+        if existing != list(header):
+            raise ValueError(
+                f"Header mismatch for {path}. "
+                "Use a new output path instead of mixing catalog schemas.")
+        return
+    with open(path, "w", newline="") as handle:
+        csv.writer(handle, delimiter=" ").writerow(header)
+
+
+def _qa_output_path(fd_output):
+    fd_output = Path(fd_output)
+    return fd_output.with_name(f"{fd_output.stem}_failures.dat")
+
+
+def _feature_missing_qa(sid, error_record, nominal_record):
+    missing = [
+        name for name in FD_ERROR_COLUMNS
+        if not _is_finite(error_record.get(name))
+    ]
+    if not missing:
+        return None
+    return make_qa_record(
+        sid=sid,
+        status="feature_missing",
+        retryable=False,
+        stage="hc3_feature",
+        reason="nonfinite:" + ",".join(missing),
+        nominal_record=nominal_record,
+    )
+
+
+def _is_finite(value):
+    try:
+        import numpy as np
+        return bool(np.isfinite(float(value)))
+    except (TypeError, ValueError):
+        return False
+
+
+def _calculate_error_payload(
+        sid, nominal_record, mode, n_draws, random_state, robust,
+        rms_ratio_limit, min_occupied_fraction, max_phase_gap):
     from . import decomposition as decomp_mod
+
+    epoch_data = epoch_arrays(decomp_mod.ls_data, sid, mode=mode)
+    qa_record = assess_nominal_fit_quality(
+        sid=sid,
+        nominal_record=nominal_record,
+        mode=mode,
+        epoch_data=epoch_data,
+        rms_ratio_limit=rms_ratio_limit,
+        min_occupied_fraction=min_occupied_fraction,
+        max_phase_gap=max_phase_gap,
+    )
+    try:
+        error_record = compute_minimal_hc3_errors(
+            sid=sid,
+            nominal_record=nominal_record,
+            mode=mode,
+            epoch_data=epoch_data,
+            n_draws=n_draws,
+            random_state=random_state,
+            robust=robust,
+        )
+        qa_record = merge_qa_records(
+            qa_record,
+            _feature_missing_qa(sid, error_record, nominal_record),
+        )
+    except Exception as exc:
+        error_record = nan_error_record()
+        qa_record = merge_qa_records(
+            qa_record,
+            make_qa_record(
+                sid=sid,
+                status="failed",
+                retryable=True,
+                stage="hc3",
+                reason=repr(exc),
+                nominal_record=nominal_record,
+            ),
+        )
+    return error_record, qa_record
+
+
+def _worker_call(args):
+    """Picklable wrapper for nominal fitting and optional HC3 propagation."""
+    (
+        sid, mode, init, period_fit, use_optim, adaptive_lam, use_refit,
+        verbose, return_error, error_n_draws, error_random_state,
+        error_robust, rms_ratio_limit, min_occupied_fraction, max_phase_gap,
+    ) = args
+    from . import decomposition as decomp_mod
+
     try:
         row = decomp_mod.fourier_decomp(
             sid,
@@ -31,9 +143,32 @@ def _worker_call(args):
             use_refit=use_refit,
             verbose=verbose,
         )
-        return (sid, row, None)
-    except Exception as e:
-        return (sid, None, repr(e))
+        if row is None:
+            qa_record = make_qa_record(
+                sid, "failed", True, "nominal",
+                "fourier_decomp_returned_none")
+            return sid, None, qa_record, None
+
+        if not return_error:
+            return sid, row, None, None
+
+        nominal_record = dict(zip(build_fd_header(mode), row))
+        error_record, qa_record = _calculate_error_payload(
+            sid=sid,
+            nominal_record=nominal_record,
+            mode=mode,
+            n_draws=error_n_draws,
+            random_state=error_random_state,
+            robust=error_robust,
+            rms_ratio_limit=rms_ratio_limit,
+            min_occupied_fraction=min_occupied_fraction,
+            max_phase_gap=max_phase_gap,
+        )
+        return sid, [*row, *error_values(error_record)], qa_record, None
+    except Exception as exc:
+        qa_record = make_qa_record(
+            sid, "failed", True, "nominal", repr(exc))
+        return sid, None, qa_record, repr(exc)
 
 def mp_run(
     fd_output,
@@ -45,24 +180,41 @@ def mp_run(
     mode=mode_default,
     init=init,
     max_workers=8,
-    chunksize=64,
+    chunksize=1,
     verbose=False,
     mp_context="fork",   # "fork" 권장(리눅스). 안 되면 "spawn"으로.
+    return_error=False,
+    error_n_draws=4000,
+    error_random_state=0,
+    error_robust=True,
+    qa_output=None,
+    rms_ratio_limit=0.7,
+    min_occupied_fraction=None,
+    max_phase_gap=None,
 ):
     """
     Run decomposition.fourier_decomp(sid, ...) over many IDs with multiprocessing.
     - progress monitoring: tqdm
     - memory: prefer fork so ls_data is shared (COW)
-    - performance: imap_unordered + chunksize + single-writer
+    - performance: imap_unordered + single-writer
+    - return_error=True: append only ML-facing R/phi values and HC3 errors
+    - fit/HC3 failures and quality-review IDs go to a separate QA table
     """
 
     from . import decomposition as decomp_mod
+    fd_output = Path(fd_output)
+    base_header = build_fd_header(mode)
+    output_header = (
+        build_fd_error_header(base_header) if return_error else base_header)
+    if qa_output is None and return_error:
+        qa_output = _qa_output_path(fd_output)
+    if qa_output is not None:
+        qa_output = Path(qa_output)
 
     # 1) output header
-    if not fd_output.exists():
-        with open(fd_output, "w", newline="") as f:
-            writer = csv.writer(f, delimiter=" ")
-            writer.writerow(build_fd_header(mode))
+    _ensure_output_header(fd_output, output_header)
+    if qa_output is not None:
+        _ensure_output_header(qa_output, FD_QA_COLUMNS)
 
     # 2) choose mp context
     # fork가 불가능한 환경이면 spawn로 자동 fallback
@@ -78,40 +230,267 @@ def mp_run(
         initargs=(decomp_mod.ls_data, decomp_mod.df_ident, decomp_mod.df_rrfit, decomp_mod.templates),
     )
 
+    ids = list(ids)
     n_total = len(ids)
-    n_ok, n_fail = 0, 0
+    n_ok, n_fail, n_review, n_feature_missing = 0, 0, 0, 0
     t0 = time.time()
 
     # 4) single-writer in main process
+    f_qa = (
+        open(qa_output, "a", newline="") if qa_output is not None else None)
     with open(fd_output, "a", newline="") as f_out:
         writer = csv.writer(f_out, delimiter=" ")
+        qa_writer = csv.writer(f_qa, delimiter=" ") if f_qa is not None else None
 
         try:
             it = pool.imap_unordered(
                 _worker_call,
-                ((sid, mode, init, period_fit, use_optim, adaptive_lam, use_refit, verbose) for sid in ids),
+                (
+                    (
+                        sid, mode, init, period_fit, use_optim, adaptive_lam,
+                        use_refit, verbose, return_error, error_n_draws,
+                        error_random_state, error_robust, rms_ratio_limit,
+                        min_occupied_fraction, max_phase_gap,
+                    )
+                    for sid in ids
+                ),
                 chunksize=chunksize,
             )
 
-            for sid, row, err in tqdm(it, total=n_total, desc="Fourier Decomposition"):
+            for sid, row, qa_record, err in tqdm(
+                    it, total=n_total, desc="Fourier Decomposition"):
                 if row is not None:
                     writer.writerow(row)
                     n_ok += 1
                 else:
                     n_fail += 1
-                    # 너무 많이 찍히면 느려지니 필요 시 일부만 출력
                     print(f"[FAIL] sid={sid} err={err}")
+                if qa_record is not None and qa_record["status"] != "ok":
+                    if qa_writer is not None:
+                        qa_writer.writerow(qa_values(qa_record))
+                    if qa_record["status"] == "failed" and row is not None:
+                        n_fail += 1
+                    elif qa_record["status"] == "review":
+                        n_review += 1
+                    elif qa_record["status"] == "feature_missing":
+                        n_feature_missing += 1
 
         except KeyboardInterrupt:
             print("\nTerminating worker pool...")
             pool.terminate()
-        finally:
+            pool.join()
+            raise
+        else:
             pool.close()
             pool.join()
+        finally:
+            if f_qa is not None:
+                f_qa.close()
 
     dt = time.time() - t0
     rate = n_total / dt if dt > 0 else float("nan")
-    print(f"Done. total={n_total}, ok={n_ok}, fail={n_fail}, elapsed={dt:.1f}s, rate={rate:.2f} obj/s")
+    print(
+        f"Done. total={n_total}, rows={n_ok}, fail={n_fail}, "
+        f"review={n_review}, feature_missing={n_feature_missing}, "
+        f"elapsed={dt:.1f}s, rate={rate:.2f} obj/s")
+    return {
+        "total": n_total,
+        "rows": n_ok,
+        "failed": n_fail,
+        "review": n_review,
+        "feature_missing": n_feature_missing,
+        "elapsed": dt,
+        "rate": rate,
+        "output": str(fd_output),
+        "qa_output": str(qa_output) if qa_output is not None else None,
+    }
+
+
+# -----------------------------------------------------------------------------
+# Existing nominal catalog -> compact HC3 error catalog
+# -----------------------------------------------------------------------------
+
+def _existing_catalog_worker(args):
+    (
+        sid, nominal_record, input_columns, mode, n_draws, random_state,
+        robust, rms_ratio_limit, min_occupied_fraction, max_phase_gap,
+    ) = args
+    try:
+        error_record, qa_record = _calculate_error_payload(
+            sid=sid,
+            nominal_record=nominal_record,
+            mode=mode,
+            n_draws=n_draws,
+            random_state=random_state,
+            robust=robust,
+            rms_ratio_limit=rms_ratio_limit,
+            min_occupied_fraction=min_occupied_fraction,
+            max_phase_gap=max_phase_gap,
+        )
+    except Exception as exc:
+        error_record = nan_error_record()
+        qa_record = make_qa_record(
+            sid, "failed", True, "catalog_hc3", repr(exc), nominal_record)
+    row = [nominal_record.get(name) for name in input_columns]
+    row.extend(error_values(error_record))
+    return sid, row, qa_record
+
+
+def add_hc3_errors_to_fd_catalog(
+        fd_input,
+        fd_output=None,
+        mode=mode_default,
+        qa_output=None,
+        all_ids=None,
+        max_workers=8,
+        chunksize=1,
+        mp_context="fork",
+        n_draws=4000,
+        random_state=0,
+        robust=True,
+        rms_ratio_limit=0.7,
+        min_occupied_fraction=None,
+        max_phase_gap=None,
+):
+    """Add compact HC3 errors to an existing nominal Fourier catalog.
+
+    The nominal fit is not repeated.  Rows with HC3 failures are retained with
+    NaN error fields and are listed in the separate QA file.
+    """
+    import pandas as pd
+    from . import decomposition as decomp_mod
+
+    fd_input = Path(fd_input)
+    if not fd_input.exists():
+        raise FileNotFoundError(fd_input)
+    if fd_output is None:
+        fd_output = fd_input.with_name(
+            f"{fd_input.stem}_with_err{fd_input.suffix}")
+    fd_output = Path(fd_output)
+    if qa_output is None:
+        qa_output = _qa_output_path(fd_output)
+    qa_output = Path(qa_output)
+
+    frame = pd.read_csv(fd_input, sep=r"\s+", dtype={"ID": str})
+    input_columns = list(frame.columns)
+    expected_columns = build_fd_header(mode)
+    missing_columns = [
+        name for name in expected_columns if name not in input_columns]
+    if missing_columns:
+        raise ValueError(
+            f"Nominal catalog is missing columns: {missing_columns}")
+    if any(name in input_columns for name in FD_ERROR_COLUMNS):
+        raise ValueError(
+            "Input already contains HC3 error columns; use the nominal catalog")
+
+    output_header = build_fd_error_header(input_columns)
+    _ensure_output_header(fd_output, output_header)
+    _ensure_output_header(qa_output, FD_QA_COLUMNS)
+
+    completed = set()
+    if fd_output.exists() and fd_output.stat().st_size > 0:
+        completed_frame = pd.read_csv(
+            fd_output, sep=r"\s+", usecols=["ID"], dtype={"ID": str})
+        completed = set(completed_frame["ID"].astype(str))
+
+    source_map = {str(sid): sid for sid in decomp_mod.ls_data.keys()}
+    duplicate_ids = set(
+        frame.loc[frame["ID"].duplicated(keep=False), "ID"].astype(str))
+    frame = frame.drop_duplicates(subset="ID", keep="last")
+
+    catalog_ids = set(frame["ID"].astype(str))
+    if all_ids is None:
+        missing_nominal = []
+    else:
+        all_id_keys = {str(sid) for sid in all_ids}
+        missing_nominal = sorted(all_id_keys - catalog_ids)
+
+    pending_records = []
+    for record in frame.to_dict(orient="records"):
+        sid_key = str(record["ID"])
+        if sid_key in completed:
+            continue
+        sid = source_map.get(sid_key, record["ID"])
+        record["ID"] = sid_key
+        pending_records.append((sid, record))
+
+    try:
+        ctx = get_context(mp_context)
+    except ValueError:
+        ctx = get_context("spawn")
+    pool = ctx.Pool(
+        processes=max_workers,
+        initializer=_init_worker,
+        initargs=(
+            decomp_mod.ls_data, decomp_mod.df_ident,
+            decomp_mod.df_rrfit, decomp_mod.templates,
+        ),
+    )
+
+    n_rows = n_failed = n_review = n_feature_missing = 0
+    with open(fd_output, "a", newline="") as f_out, open(
+            qa_output, "a", newline="") as f_qa:
+        writer = csv.writer(f_out, delimiter=" ")
+        qa_writer = csv.writer(f_qa, delimiter=" ")
+
+        for sid_key in sorted(duplicate_ids):
+            qa_writer.writerow(qa_values(make_qa_record(
+                sid_key, "review", True, "catalog",
+                "duplicate_nominal_row")))
+        for sid_key in missing_nominal:
+            qa_writer.writerow(qa_values(make_qa_record(
+                sid_key, "failed", True, "nominal",
+                "missing_from_nominal_catalog")))
+
+        try:
+            iterator = pool.imap_unordered(
+                _existing_catalog_worker,
+                (
+                    (
+                        sid, record, input_columns, mode, n_draws,
+                        random_state, robust, rms_ratio_limit,
+                        min_occupied_fraction, max_phase_gap,
+                    )
+                    for sid, record in pending_records
+                ),
+                chunksize=chunksize,
+            )
+            for sid, row, qa_record in tqdm(
+                    iterator, total=len(pending_records),
+                    desc="HC3 catalog augmentation"):
+                writer.writerow(row)
+                n_rows += 1
+                if qa_record is not None and qa_record["status"] != "ok":
+                    qa_writer.writerow(qa_values(qa_record))
+                    if qa_record["status"] == "failed":
+                        n_failed += 1
+                    elif qa_record["status"] == "review":
+                        n_review += 1
+                    elif qa_record["status"] == "feature_missing":
+                        n_feature_missing += 1
+        except KeyboardInterrupt:
+            print("\nTerminating HC3 worker pool...")
+            pool.terminate()
+            pool.join()
+            raise
+        else:
+            pool.close()
+            pool.join()
+
+    print(
+        f"HC3 catalog done. rows={n_rows}, failed={n_failed}, "
+        f"review={n_review}, feature_missing={n_feature_missing}, "
+        f"missing_nominal={len(missing_nominal)}")
+    return {
+        "rows": n_rows,
+        "failed": n_failed,
+        "review": n_review,
+        "feature_missing": n_feature_missing,
+        "missing_nominal": len(missing_nominal),
+        "output": str(fd_output),
+        "qa_output": str(qa_output),
+    }
+
 
 def thread_run(fd_output, ids, period_fit = period_fit,
                use_optim = use_optim, adaptive_lam = adaptive_lam, use_refit = use_refit,
