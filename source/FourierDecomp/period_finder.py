@@ -24,19 +24,32 @@ Nterms = 1 # truncated fourier series for Lomb-Scargle
 # =====================================
 
 # Define Lomb-Scargle model (default Nbase = 1, Nband = 1) + Fast
-model = periodic.LombScargleMultibandFast(fit_period = True, Nterms=Nterms, 
+model = periodic.LombScargleMultibandFast(fit_period = True, Nterms=Nterms,
                                           optimizer_kwds={'quiet':True}) #MultibandFast -> silence_warnings=False option N/A
 model.optimizer.period_range = (pmin,pmax)
 
-def calc_fgrid(t, n0 = 5):
+def calc_fgrid(t, n0=5, period_min=None, period_max=None):
     # n0 : oversampling ratio
-    t0, T = t[0], t[-1]-t[0] #initial epoch & length of time window
+    t = np.asarray(t, dtype=float)
+    t = t[np.isfinite(t)]
+    if t.size < 2:
+        raise ValueError("period_search_requires_at_least_two_epochs")
+    t0, T = np.min(t), np.ptp(t) #initial epoch & length of time window
+    if not np.isfinite(T) or T <= 0:
+        raise ValueError("period_search_requires_positive_baseline")
+    period_min = pmin if period_min is None else float(period_min)
+    period_max = pmax if period_max is None else float(period_max)
+    if period_max <= period_min:
+        raise ValueError(
+            f"period_search_baseline_too_short:{T:.6g}d")
     tn = np.expand_dims(t-t0, axis=0).T
     
     # Frequency Grid
     delta_f = 1/(n0*T) # grid spacing (VanderPlas 2018)
     #delta_f = (len(t)/2)/(n0*T) # grid spacing (Frescura 2008)
-    f = np.arange(fmin,fmax+delta_f,delta_f)
+    f_lo = 1.0 / period_max
+    f_hi = 1.0 / period_min
+    f = np.arange(f_lo, f_hi + delta_f, delta_f)
     period = 1/f
     
     return f, period, delta_f
@@ -74,11 +87,13 @@ def window_alias_mask(freqs, f0, f_alias, f_alias_tol=0.01, n_alias = 2):
     return mask
 
 # ======= aliased / harmonic solutions ========
-def harmonic_periods(P0, harmonics = 2):
+def harmonic_periods(P0, harmonics=2, period_min=None, period_max=None):
+    period_min = pmin if period_min is None else float(period_min)
+    period_max = pmax if period_max is None else float(period_max)
     Ps = [P0]
     for n in range(2, harmonics + 1):
-        if n * P0 <= pmax: Ps.append(n * P0) # subharmonic in frequency (overtone in period)
-        if P0 / n >= pmin: Ps.append(P0 / n) # harmonic in frequency (subharmonic in period)
+        if n * P0 <= period_max: Ps.append(n * P0) # subharmonic in frequency (overtone in period)
+        if P0 / n >= period_min: Ps.append(P0 / n) # harmonic in frequency (subharmonic in period)
     return Ps
 
 def aliased_periods(P, alias_freqs, n=1, m=1):
@@ -121,34 +136,74 @@ def cluster_periods(periods, logP_tol=0.05, min_gap=0.0, max_width=None,
 # ========= Period Search with Lomb-Scargle algorithm ==========
 def robust_period_search(t, mag, emag, bands, 
                          n0 = 5, K = 8, snr = 3, harmonics = 2,
-                         plot = False):
-    freqs, periods, delta_f = calc_fgrid(t, n0 = n0)
-    
-    cfg = get_data_config()
+                         plot = False, mode=None):
+    t = np.asarray(t, dtype=float)
+    mag = np.asarray(mag, dtype=float)
+    emag = np.asarray(emag, dtype=float)
+    bands = np.asarray(bands).astype(str)
+
+    cfg = get_data_config(mode)
     filters = cfg.filters
     activated_bands = cfg.activated_bands
-    bmask = [(bands==filters[ib]) for ib in activated_bands] # original definition: include all passbands?
+    active_names = [str(filters[ib]) for ib in activated_bands]
+
+    # Use only scientifically activated bands.  In particular, a single
+    # inactive-band point must not make the multiband normal matrix singular.
+    observed_names = [
+        band for band in active_names if np.count_nonzero(bands == band) >= 2
+    ]
+    if not observed_names:
+        raise ValueError("missing_observed_active_band")
+    use = np.isin(bands, observed_names)
+    use &= np.isfinite(t) & np.isfinite(mag) & np.isfinite(emag) & (emag > 0)
+    t_fit, mag_fit, emag_fit, bands_fit = (
+        t[use], mag[use], emag[use], bands[use])
+    if t_fit.size < 3:
+        raise ValueError("period_search_insufficient_active_epochs")
+
+    baseline = float(np.ptp(t_fit))
+    # gatspy explicitly disallows periods longer than the time baseline.
+    period_max = min(float(pmax), baseline * (1.0 - 1e-8))
+    freqs, periods, delta_f = calc_fgrid(
+        t_fit, n0=n0, period_min=pmin, period_max=period_max)
+    fmin_local, fmax_local = 1.0 / period_max, 1.0 / pmin
+
+    local_model = periodic.LombScargleMultibandFast(
+        fit_period=True, Nterms=Nterms, optimizer_kwds={'quiet': True})
+    local_model.optimizer.period_range = (pmin, period_max)
+    bmask = [(bands_fit == band) for band in observed_names]
 
     # 1) evaluate Lomb-Scargle power
-    model.fit(t, mag, emag, bands)
-    Pf_LS = model.periodogram(periods)
+    local_model.fit(t_fit, mag_fit, emag_fit, bands_fit)
+    Pf_LS = np.asarray(local_model.periodogram(periods), dtype=float)
+    if not np.any(np.isfinite(Pf_LS)):
+        raise ValueError("period_search_nonfinite_periodogram")
 
     # 2) Finding peak (coarse search)
     #sep = int(sep_frac*fmin/delta_f)
-    sigma_Pf_LS = np.std(Pf_LS)
-    pidx = find_peaks(Pf_LS, height = snr * sigma_Pf_LS)[0] 
+    sigma_Pf_LS = np.nanstd(Pf_LS)
+    pidx = find_peaks(Pf_LS, height = snr * sigma_Pf_LS)[0]
     # select peaks having large contrast (prominence)
-    prom = peak_prominences(Pf_LS, pidx)[0]
-    prom_thres = np.median(prom)
-    pidx = find_peaks(Pf_LS, height = snr * sigma_Pf_LS, prominence = prom_thres)[0] 
+    if pidx.size:
+        prom = peak_prominences(Pf_LS, pidx)[0]
+        prom_thres = np.median(prom)
+        pidx = find_peaks(
+            Pf_LS, height=snr * sigma_Pf_LS,
+            prominence=prom_thres)[0]
+    if pidx.size == 0:
+        # A low-S/N source still needs a deterministic candidate.  Prefer
+        # separated local maxima; fall back to the global maximum only.
+        pidx = find_peaks(Pf_LS)[0]
+    if pidx.size == 0:
+        pidx = np.array([int(np.nanargmax(Pf_LS))])
     # select K peaks
     pidx = pidx[np.argsort(Pf_LS[pidx])[::-1]][:K]
     P_coarse = periods[pidx]
     
     # zoom-in search
     def objective_func(P):
-        if P <= pmin or P >= pmax: return np.inf 
-        return -model.score([P])[0]
+        if P <= pmin or P >= period_max: return np.inf
+        return -local_model.score([P])[0]
    
     P_refined = []
     for P0 in P_coarse:
@@ -156,8 +211,8 @@ def robust_period_search(t, mag, emag, bands,
         if delta_f * P0 > delta_P_tol:
             f0 = 1.0 / P0
             # setting bounds at nearby f0
-            f_low = max(fmin, f0 - delta_f)
-            f_high = min(fmax, f0 + delta_f)
+            f_low = max(fmin_local, f0 - delta_f)
+            f_high = min(fmax_local, f0 + delta_f)
             # minimization
             res = minimize_scalar(objective_func, 
                                   bounds=(1.0/f_high, 1.0/f_low), 
@@ -170,10 +225,19 @@ def robust_period_search(t, mag, emag, bands,
     # 3) period candidates
     Ps = []
     for P0 in P_refined: 
-         Ps+=harmonic_periods(P0, harmonics)
-    Ps = np.array(Ps); Zs = model.score(Ps)
+         Ps += harmonic_periods(
+             P0, harmonics, period_min=pmin, period_max=period_max)
+    Ps = np.unique(np.asarray(Ps, dtype=float))
+    if Ps.size == 0:
+        raise ValueError("period_search_no_candidate")
+    Zs = local_model.score(Ps)
     mask = (Zs > 3*sigma_Pf_LS) # if peaks are significant
     Ps, Zs = Ps[mask], Zs[mask]
+
+    if Ps.size == 0:
+        best = int(np.nanargmax(Pf_LS))
+        Ps = np.array([periods[best]], dtype=float)
+        Zs = np.array([Pf_LS[best]], dtype=float)
 
     if plot: plot_LS(freqs, periods, Pf_LS, peaks = [Ps, Zs],
                      thresh = [sigma_Pf_LS, snr * sigma_Pf_LS])

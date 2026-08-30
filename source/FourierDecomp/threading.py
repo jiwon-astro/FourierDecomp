@@ -9,6 +9,8 @@ from .IO import build_fd_header, epoch_arrays
 from .catalog import (
     FD_ERROR_COLUMNS,
     FD_QA_COLUMNS,
+    PERIOD_AUDIT_COLUMNS,
+    assess_period_stability,
     assess_nominal_fit_quality,
     build_fd_error_header,
     compute_minimal_hc3_errors,
@@ -16,6 +18,7 @@ from .catalog import (
     make_qa_record,
     merge_qa_records,
     nan_error_record,
+    period_audit_values,
     qa_values,
 )
 
@@ -78,6 +81,26 @@ def _is_finite(value):
         return False
 
 
+def _failure_qa_record(sid, stage, exc):
+    """Classify structural data failures separately from retryable fit failures."""
+    reason = repr(exc)
+    nonretryable_tokens = (
+        "missing_observed_active_band",
+        "insufficient_active_epochs_for_M_MIN",
+        "period_search_baseline_too_short",
+        "period_search_requires_at_least_two_epochs",
+        "period_search_requires_positive_baseline",
+    )
+    retryable = not any(token in reason for token in nonretryable_tokens)
+    return make_qa_record(
+        sid=sid,
+        status="failed",
+        retryable=retryable,
+        stage=stage,
+        reason=reason,
+    )
+
+
 def _calculate_error_payload(
         sid, nominal_record, mode, n_draws, random_state, robust,
         rms_ratio_limit, min_occupied_fraction, max_phase_gap):
@@ -125,10 +148,15 @@ def _calculate_error_payload(
 
 def _worker_call(args):
     """Picklable wrapper for nominal fitting and optional HC3 propagation."""
+    if len(args) == 15:
+        # Backward compatibility with notebooks/tests written before the
+        # per-run period-candidate controls were exposed.
+        args = (*args, None, None)
     (
         sid, mode, init, period_fit, use_optim, adaptive_lam, use_refit,
         verbose, return_error, error_n_draws, error_random_state,
         error_robust, rms_ratio_limit, min_occupied_fraction, max_phase_gap,
+        K, harmonics,
     ) = args
     from . import decomposition as decomp_mod
 
@@ -142,6 +170,8 @@ def _worker_call(args):
             adaptive_lam=adaptive_lam,
             use_refit=use_refit,
             verbose=verbose,
+            K=K,
+            harmonics=harmonics,
         )
         if row is None:
             qa_record = make_qa_record(
@@ -166,8 +196,7 @@ def _worker_call(args):
         )
         return sid, [*row, *error_values(error_record)], qa_record, None
     except Exception as exc:
-        qa_record = make_qa_record(
-            sid, "failed", True, "nominal", repr(exc))
+        qa_record = _failure_qa_record(sid, "nominal", exc)
         return sid, None, qa_record, repr(exc)
 
 def mp_run(
@@ -191,6 +220,9 @@ def mp_run(
     rms_ratio_limit=0.7,
     min_occupied_fraction=None,
     max_phase_gap=None,
+    K=None,
+    harmonics=None,
+    resume=True,
 ):
     """
     Run decomposition.fourier_decomp(sid, ...) over many IDs with multiprocessing.
@@ -199,6 +231,7 @@ def mp_run(
     - performance: imap_unordered + single-writer
     - return_error=True: append only ML-facing R/phi values and HC3 errors
     - fit/HC3 failures and quality-review IDs go to a separate QA table
+    - K/harmonics override the defaults for an explicit deep-refit pass
     """
 
     from . import decomposition as decomp_mod
@@ -231,6 +264,19 @@ def mp_run(
     )
 
     ids = list(ids)
+    if resume and fd_output.exists() and fd_output.stat().st_size > 0:
+        try:
+            import pandas as pd
+            completed = set(pd.read_csv(
+                fd_output, sep=r"\s+", usecols=["ID"],
+                dtype={"ID": str})["ID"].astype(str))
+            ids = [sid for sid in ids if str(sid) not in completed]
+        except Exception:
+            # Header validation above has already protected the schema.  If a
+            # partially written row prevents resume parsing, fail visibly.
+            raise ValueError(
+                f"Could not read completed IDs from {fd_output}; "
+                "repair the partial last row or use a new output path")
     n_total = len(ids)
     n_ok, n_fail, n_review, n_feature_missing = 0, 0, 0, 0
     t0 = time.time()
@@ -250,7 +296,7 @@ def mp_run(
                         sid, mode, init, period_fit, use_optim, adaptive_lam,
                         use_refit, verbose, return_error, error_n_draws,
                         error_random_state, error_robust, rms_ratio_limit,
-                        min_occupied_fraction, max_phase_gap,
+                        min_occupied_fraction, max_phase_gap, K, harmonics,
                     )
                     for sid in ids
                 ),
@@ -489,6 +535,119 @@ def add_hc3_errors_to_fd_catalog(
         "missing_nominal": len(missing_nominal),
         "output": str(fd_output),
         "qa_output": str(qa_output),
+    }
+
+
+# -----------------------------------------------------------------------------
+# Reference-free period/alias audit
+# -----------------------------------------------------------------------------
+
+def _period_audit_worker(args):
+    sid, nominal_record, mode, audit_kwargs = args
+    try:
+        record = assess_period_stability(
+            sid=sid, nominal_record=nominal_record, mode=mode,
+            **audit_kwargs)
+    except Exception as exc:
+        record = {
+            "ID": str(sid), "status": "review", "retryable": 1,
+            "reason": f"period_audit_exception:{repr(exc)}",
+        }
+    return record
+
+
+def audit_period_stability_catalog(
+        fd_input, audit_output=None, mode=mode_default, max_workers=8,
+        chunksize=8, mp_context="fork", deep_k=15, harmonic_depth=4,
+        screen_order=3, better_score_threshold=10.0,
+        ambiguity_threshold=2.0, minimum_cycles=2.0, overwrite=False,
+        resume=True):
+    """Screen every fitted source for a plausible reference-free alias.
+
+    This is a selection audit only.  It writes no replacement periods and
+    never changes the input catalog.
+    """
+    import pandas as pd
+    from . import decomposition as decomp_mod
+
+    fd_input = Path(fd_input)
+    if audit_output is None:
+        audit_output = fd_input.with_name(
+            f"{fd_input.stem}_period_audit.dat")
+    audit_output = Path(audit_output)
+    completed = set()
+    if audit_output.exists():
+        if overwrite:
+            audit_output.unlink()
+        elif resume:
+            existing_header = _header_from_file(audit_output)
+            if existing_header != list(PERIOD_AUDIT_COLUMNS):
+                raise ValueError(f"Header mismatch for {audit_output}")
+            completed = set(pd.read_csv(
+                audit_output, sep=r"\s+", usecols=["ID"],
+                dtype={"ID": str})["ID"].astype(str))
+        else:
+            raise FileExistsError(
+                f"Refusing to overwrite {audit_output}; use overwrite=True")
+        audit_output.unlink()
+
+    frame = pd.read_csv(fd_input, sep=r"\s+", dtype={"ID": str})
+    if frame["ID"].duplicated().any():
+        raise ValueError("fd_input contains duplicate IDs")
+    source_map = {str(sid): sid for sid in decomp_mod.ls_data.keys()}
+    records = []
+    for nominal in frame.to_dict(orient="records"):
+        sid_key = str(nominal["ID"])
+        if sid_key in completed:
+            continue
+        records.append((source_map.get(sid_key, sid_key), nominal))
+
+    audit_kwargs = {
+        "deep_k": int(deep_k),
+        "harmonic_depth": int(harmonic_depth),
+        "screen_order": int(screen_order),
+        "better_score_threshold": float(better_score_threshold),
+        "ambiguity_threshold": float(ambiguity_threshold),
+        "minimum_cycles": float(minimum_cycles),
+    }
+    try:
+        ctx = get_context(mp_context)
+    except ValueError:
+        ctx = get_context("spawn")
+    pool = ctx.Pool(
+        processes=max_workers,
+        initializer=_init_worker,
+        initargs=(
+            decomp_mod.ls_data, decomp_mod.df_ident,
+            decomp_mod.df_rrfit, decomp_mod.templates,
+        ),
+    )
+    _ensure_output_header(audit_output, PERIOD_AUDIT_COLUMNS)
+    n_review = n_failed = 0
+    with open(audit_output, "a", newline="") as handle:
+        writer = csv.writer(handle, delimiter=" ")
+        try:
+            iterator = pool.imap_unordered(
+                _period_audit_worker,
+                ((sid, nominal, mode, audit_kwargs)
+                 for sid, nominal in records),
+                chunksize=chunksize,
+            )
+            for record in tqdm(
+                    iterator, total=len(records), desc="Period stability audit"):
+                writer.writerow(period_audit_values(record))
+                n_review += int(record.get("status") == "review")
+                n_failed += int(record.get("status") == "failed")
+        except KeyboardInterrupt:
+            pool.terminate()
+            pool.join()
+            raise
+        else:
+            pool.close()
+            pool.join()
+    return {
+        "rows": len(records), "review": n_review, "failed": n_failed,
+        "output": str(audit_output),
     }
 
 

@@ -45,3 +45,37 @@ result = uncertainty.bootstrap_fourier_decomp(
 On a CPU server, parallelize over source IDs and keep the replicate loop inside
 each source serial.  Also limit BLAS threads to one per worker to avoid nested
 parallelism.
+
+## Catalog fit, deep refit, and merge
+
+The default blind search remains a single-term Lomb--Scargle search with
+`K=5` candidate peaks and no automatic harmonic expansion.  The implementation
+now applies the following safeguards:
+
+- the upper search period is capped below the source time baseline;
+- only observed, scientifically activated bands enter the periodogram;
+- the initial Fourier order is capped by the available residual degrees of
+  freedom instead of forcing `M_MAX=15` on sparse light curves; and
+- `K` and `harmonics` supplied to `fourier_decomp` or `mp_run` are honored.
+
+Deep refitting is a separate pass.  `audit_period_stability_catalog` can screen
+the nominal catalog with a deeper `K=15` single-term search and low-order robust
+fits to explicit integer period families.  The screen is a triage diagnostic,
+not a period estimator: an unresolved alias remains `review`, and absence of a
+warning is not proof that the period is unique.  Sources without an active band
+or enough degrees of freedom are structural failures and are not repeatedly
+refitted.
+
+Use `merge_refit_error_catalogs` to create the final second-output catalog.  It
+never edits the base catalog, rejects non-finite HC3 rows and unresolved refit
+QA, enforces one row per ID, and writes a separate decision audit.  A recovered
+missing source is appended; an existing source is replaced only by an accepted
+refit.  The complete executable sequence is in
+`Fourier_Decomposition_Reliability_Workflow.ipynb`.
+
+The reference-free period audit was checked against the available OGLE LMC
+catalog periods as an exploratory regression: with the conservative defaults,
+it selected about 68% of the discrepant solutions in that comparison while
+flagging 4% of a 50-source agreement control sample.  Therefore it must be
+combined with bootstrap/candidate-family probabilities and an abstention tier;
+it must not be interpreted as a complete alias detector.

@@ -339,8 +339,21 @@ def calculate_m0_amp(args, sigma = 3.0, maxiter = 5):
         resmasks.append(resmask)
     return m0s, A0s, resmasks
 
-def select_order(P0, args, activated_bands, phase_gaps, M_trunc, tie_breaker="minimum",
-                 period_fit=False, use_optim=False, adaptive_lam=False, verbose=False):
+def _supported_fourier_order(args, activated_bands, requested_order,
+                             min_residual_dof=1):
+    """Largest identifiable shared-shape order for the active observations."""
+    bmask = args[3]
+    n_active = int(sum(np.count_nonzero(bmask[ib]) for ib in activated_bands))
+    n_bands = len(activated_bands)
+    # theta contains two band parameters, 2*M shape coefficients, P and E.
+    available = n_active - 2 * n_bands - 2 - int(min_residual_dof)
+    supported = int(np.floor(available / 2.0))
+    return min(int(requested_order), supported)
+
+
+def select_order(P0, args, activated_bands, phase_gaps, M_trunc,
+                 tie_breaker="minimum", period_fit=False, use_optim=False,
+                 adaptive_lam=False, verbose=False, M_ub_limit=None):
     t = args[0]
     phi = (t/P0)%1 # phase
     n_bands = len(activated_bands)
@@ -352,6 +365,11 @@ def select_order(P0, args, activated_bands, phase_gaps, M_trunc, tie_breaker="mi
     if verbose:
         print(f"N_eff (phase occupation) = {N_eff:.2f} / {params.n_grid}")
     M_ub = min([params.M_MAX, M_trunc + params.M_PAD])
+    if M_ub_limit is not None:
+        M_ub = min(M_ub, int(M_ub_limit))
+    if M_ub < params.M_MIN:
+        raise ValueError(
+            f"insufficient_active_epochs_for_M_MIN:{M_ub}<{params.M_MIN}")
     M_list = np.arange(params.M_MIN, M_ub+1)
     for M_fit in M_list:
         bounds = _build_bounds(n_bands, M_fit, coef_mode=coef_mode)
@@ -429,6 +447,23 @@ def fourier_decomp(sid, mode='ogle', init='lasso',
     bmask = [(bands == band) for band in filters]
     args = (t, mag, emag, bmask)
 
+    active_counts = {
+        str(filters[ib]): int(np.count_nonzero(bmask[ib]))
+        for ib in activated_bands
+    }
+    missing_active = [band for band, count in active_counts.items() if count < 2]
+    if missing_active:
+        raise ValueError(
+            "missing_observed_active_band:" + ",".join(missing_active))
+
+    M_supported = _supported_fourier_order(
+        args, activated_bands, M_MAX, min_residual_dof=1)
+    if M_supported < M_MIN:
+        n_active = sum(active_counts.values())
+        raise ValueError(
+            f"insufficient_active_epochs_for_M_MIN:N={n_active},"
+            f"supported={M_supported},required={M_MIN}")
+
     m0_data, amp_data, _ = calculate_m0_amp(args) # mean / peak-to-peak amplitude
     if verbose:
         print(f'mean mags = {m0_data}')
@@ -466,8 +501,8 @@ def fourier_decomp(sid, mode='ogle', init='lasso',
         if verbose: print(f'RRFit period = {P0:.4f}d / E = {E0:.4f}')
     else:
         P0s, Zs = robust_period_search(t, mag, emag, bands, 
-                                    n0 = params.n0, K = params.K, harmonics = params.harmonics, 
-                                    snr = params.snr, plot = plot_LS)
+                                    n0=params.n0, K=K, harmonics=harmonics,
+                                    snr=params.snr, plot=plot_LS, mode=mode)
         Zmax = Zs.max()
         if verbose: print(f'Lomb-Scargle Period = {P0s} / Z = {Zs}')
     
@@ -475,8 +510,11 @@ def fourier_decomp(sid, mode='ogle', init='lasso',
     # 2) Perform fitting
     # =====================================
 
-    # --- 1st fit (M_MAX) ---
-    M_fit_1 = M_MAX
+    # --- 1st fit (maximum statistically supported order) ---
+    # Sparse light curves cannot identify a 15th-order Fourier series.  The
+    # output is still padded to M_MAX, but the fitted order retains positive
+    # residual degrees of freedom.
+    M_fit_1 = M_supported
     bounds_1 = _build_bounds(n_bands, M_fit_1)
     
     # _fit_wrapper: return = (theta0, chi2)
@@ -505,7 +543,7 @@ def fourier_decomp(sid, mode='ogle', init='lasso',
             phase_gaps = phase_gaps_i
             
     if not np.isfinite(chi2_opt_1):
-        print(f'ID = {sid} / M_MAX fit failed.')
+        print(f'ID = {sid} / initial M={M_fit_1} fit failed.')
         return None # 1차 피팅 실패 시 중단
     
     if verbose: print(f'P0 = {P0:.4f} days')
@@ -541,7 +579,8 @@ def fourier_decomp(sid, mode='ogle', init='lasso',
     M_fit_final, theta_opt_final, chi2_opt_final, obj_opt_final, score_final = select_order(
         P0, args, activated_bands, phase_gaps, M_fit_2,
         period_fit=period_fit, use_optim=use_optim,
-        adaptive_lam=adaptive_lam, verbose=verbose)
+        adaptive_lam=adaptive_lam, verbose=verbose,
+        M_ub_limit=M_supported)
 
     m0, amp, A_fit, Q_fit, P, E = theta_to_AQ(theta_opt_final, n_bands, M_fit=M_fit_final,
                                               include_amp=True, coef_mode=_coef_mode())
