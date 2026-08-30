@@ -330,6 +330,69 @@ def conditional_invariant_uncertainty(t, mag, emag, P, E, M_fit,
     return summary
 
 
+def conditional_curve_uncertainty(t, mag, emag, P, E, M_fit,
+                                  phase_grid=None, n_draws=4000,
+                                  random_state=0, err_floor=None,
+                                  robust=True, return_draws=False,
+                                  conditional_fit=None):
+    """Propagate conditional coefficient covariance into a light-curve band.
+
+    The returned intervals are conditional on fixed ``P``, ``E`` and
+    ``M_fit``.  They describe uncertainty in the fitted mean curve, not a
+    prediction interval for a new noisy epoch.  Period aliases, order
+    switching, clipping and regularization selection require the full
+    bootstrap instead.
+    """
+    if conditional_fit is None:
+        fit = conditional_fourier_covariance(
+            t, mag, emag, P, E, M_fit,
+            err_floor=err_floor, robust=robust)
+    else:
+        fit = conditional_fit
+        expected = 1 + 2 * int(M_fit)
+        if np.asarray(fit["beta"]).shape != (expected,):
+            raise ValueError("conditional_fit beta does not match M_fit")
+        if np.asarray(fit["covariance"]).shape != (expected, expected):
+            raise ValueError("conditional_fit covariance does not match M_fit")
+
+    if phase_grid is None:
+        phase_grid = np.linspace(0.0, 1.0, 400, endpoint=False)
+    phase_grid = np.asarray(phase_grid, dtype=float)
+    if phase_grid.ndim != 1 or phase_grid.size < 2:
+        raise ValueError("phase_grid must be a one-dimensional array")
+
+    covariance = 0.5 * (fit["covariance"] + fit["covariance"].T)
+    eigval, eigvec = np.linalg.eigh(covariance)
+    covariance_psd = (
+        eigvec * np.maximum(eigval, 0.0)
+    ) @ eigvec.T
+
+    rng = np.random.default_rng(random_state)
+    beta_draws = rng.multivariate_normal(
+        fit["beta"], covariance_psd, size=int(n_draws))
+    t_grid = float(E) + float(P) * phase_grid
+    design_grid = cs_matrix(t_grid, P, E, M_fit)
+    curve_draws = beta_draws @ design_grid.T
+    q025, q16, q50, q84, q975 = np.nanpercentile(
+        curve_draws, [2.5, 16.0, 50.0, 84.0, 97.5], axis=0)
+
+    result = {
+        "phase": phase_grid,
+        "nominal": design_grid @ fit["beta"],
+        "median": q50,
+        "q025": q025,
+        "q16": q16,
+        "q84": q84,
+        "q975": q975,
+        "conditional_fit": fit,
+        "n_draws": int(n_draws),
+    }
+    if return_draws:
+        result["curve_draws"] = curve_draws
+        result["beta_draws"] = beta_draws
+    return result
+
+
 # -----------------------------------------------------------------------------
 # Full-pipeline epoch bootstrap
 # -----------------------------------------------------------------------------
