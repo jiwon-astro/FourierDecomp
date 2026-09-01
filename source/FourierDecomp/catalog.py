@@ -46,6 +46,12 @@ PERIOD_AUDIT_COLUMNS = (
     "delta_score", "alternate_delta", "n_candidates", "cycles_observed",
 )
 
+REFERENCE_REFIT_AUDIT_COLUMNS = (
+    "ID", "status", "retryable", "reason", "P_base", "P_reference",
+    "P_refit", "base_relative_difference", "refit_relative_difference",
+    "strategy",
+)
+
 _STATUS_RANK = {"ok": 0, "feature_missing": 1, "review": 2, "failed": 3}
 
 
@@ -558,6 +564,137 @@ def load_deep_refit_ids(qa_path, period_audit_path=None):
     return list(dict.fromkeys(str(sid) for sid in selected))
 
 
+# -----------------------------------------------------------------------------
+# OGLE-reference-guided rescue (development/training catalog only)
+# -----------------------------------------------------------------------------
+
+def load_ogle_reference_periods(fourier_dir, pattern="*.dat"):
+    """Load the public OGLE period column from Fourier catalog files.
+
+    OGLE Fourier tables are headerless; columns 0 and 3 contain source ID and
+    period.  Duplicate IDs are accepted only when their periods agree.  The
+    returned mapping is intentionally explicit so a guided refit cannot fall
+    back silently to blind period search for a missing source.
+    """
+    import pandas as pd
+
+    fourier_dir = Path(fourier_dir)
+    paths = sorted(fourier_dir.glob(pattern))
+    if not paths:
+        raise FileNotFoundError(
+            f"No OGLE Fourier files matched {fourier_dir / pattern}")
+    periods = {}
+    for path in paths:
+        frame = pd.read_csv(
+            path, sep=r"\s+", header=None, comment="#", na_values="-")
+        if frame.shape[1] < 4:
+            raise ValueError(f"OGLE Fourier table has fewer than 4 columns: {path}")
+        for sid, period in frame.iloc[:, [0, 3]].itertuples(index=False, name=None):
+            sid = str(sid)
+            try:
+                period = float(period)
+            except (TypeError, ValueError):
+                continue
+            if not np.isfinite(period) or period <= 0:
+                continue
+            previous = periods.get(sid)
+            if previous is not None and not np.isclose(
+                    previous, period, rtol=1e-8, atol=0.0):
+                raise ValueError(
+                    f"Conflicting OGLE reference periods for {sid}: "
+                    f"{previous} versus {period}")
+            periods[sid] = period
+    return periods
+
+
+def select_reference_period_refit_ids(
+        base_catalog, reference_periods, relative_tolerance=1e-3,
+        period_column="P"):
+    """Select base rows whose adopted period disagrees with OGLE reference."""
+    import pandas as pd
+
+    frame = pd.read_csv(
+        base_catalog, sep=r"\s+", usecols=["ID", period_column],
+        dtype={"ID": str})
+    selected = []
+    for sid, period in frame[["ID", period_column]].itertuples(
+            index=False, name=None):
+        reference = reference_periods.get(str(sid))
+        if reference is None:
+            continue
+        try:
+            relative = abs(float(period) / float(reference) - 1.0)
+        except (TypeError, ValueError, ZeroDivisionError):
+            relative = np.inf
+        if not np.isfinite(relative) or relative > float(relative_tolerance):
+            selected.append(str(sid))
+    return selected
+
+
+def audit_reference_period_refit_catalog(
+        refit_catalog, reference_periods, output_path, base_catalog=None,
+        relative_tolerance=1e-3, strategy="fixed", overwrite=False):
+    """Write merge-compatible provenance/QA for reference-guided refits."""
+    import pandas as pd
+
+    output_path = Path(output_path)
+    if output_path.exists() and not overwrite:
+        raise FileExistsError(
+            f"Refusing to overwrite {output_path}; use overwrite=True")
+    refit = pd.read_csv(
+        refit_catalog, sep=r"\s+", usecols=["ID", "P"], dtype={"ID": str})
+    base_map = {}
+    if base_catalog is not None and Path(base_catalog).exists():
+        base = pd.read_csv(
+            base_catalog, sep=r"\s+", usecols=["ID", "P"],
+            dtype={"ID": str})
+        base_map = dict(zip(base["ID"].astype(str), base["P"]))
+
+    rows = []
+    for sid, period in refit[["ID", "P"]].itertuples(index=False, name=None):
+        sid = str(sid)
+        reference = reference_periods.get(sid)
+        base_period = base_map.get(sid, np.nan)
+        if reference is None:
+            status, retryable, reason = "failed", 0, "reference_period_missing"
+            refit_relative = np.nan
+        else:
+            try:
+                refit_relative = abs(float(period) / float(reference) - 1.0)
+            except (TypeError, ValueError, ZeroDivisionError):
+                refit_relative = np.inf
+            if np.isfinite(refit_relative) and (
+                    refit_relative <= float(relative_tolerance)):
+                status, retryable, reason = "ok", 0, "reference_period_agreement"
+            else:
+                status, retryable, reason = (
+                    "review", 1, "reference_period_disagreement")
+        try:
+            base_relative = abs(float(base_period) / float(reference) - 1.0)
+        except (TypeError, ValueError, ZeroDivisionError):
+            base_relative = np.nan
+        rows.append({
+            "ID": sid, "status": status, "retryable": retryable,
+            "reason": reason, "P_base": base_period,
+            "P_reference": reference if reference is not None else np.nan,
+            "P_refit": period,
+            "base_relative_difference": base_relative,
+            "refit_relative_difference": refit_relative,
+            "strategy": sanitize_reason(strategy),
+        })
+
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    pd.DataFrame(rows, columns=REFERENCE_REFIT_AUDIT_COLUMNS).to_csv(
+        output_path, sep=" ", index=False, na_rep="nan")
+    return {
+        "rows": int(len(rows)),
+        "ok": int(sum(row["status"] == "ok" for row in rows)),
+        "review": int(sum(row["status"] == "review" for row in rows)),
+        "failed": int(sum(row["status"] == "failed" for row in rows)),
+        "output": str(output_path),
+    }
+
+
 def split_refit_ids_by_support(ids, mode=None, ls_data=None):
     """Separate deep-refit candidates from structurally unsupported sources."""
     if mode is None:
@@ -785,9 +922,13 @@ def merge_refit_error_catalogs(
 
     output_catalog.parent.mkdir(parents=True, exist_ok=True)
     audit_output.parent.mkdir(parents=True, exist_ok=True)
-    merged.to_csv(output_catalog, sep=" ", index=False)
+    # ``sep=r"\s+"`` is used throughout the analysis notebooks.  Empty
+    # strings are therefore unsafe: consecutive spaces collapse and shift all
+    # following values one column to the left.  Write an explicit token for
+    # every missing value so the catalog remains rectangular when reloaded.
+    merged.to_csv(output_catalog, sep=" ", index=False, na_rep="nan")
     pd.DataFrame(audit, columns=FD_REFIT_AUDIT_COLUMNS).to_csv(
-        audit_output, sep=" ", index=False)
+        audit_output, sep=" ", index=False, na_rep="nan")
     return {
         "base_rows": int(len(base)),
         "refit_rows": int(len(refit)),

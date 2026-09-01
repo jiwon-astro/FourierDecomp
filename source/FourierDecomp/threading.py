@@ -152,11 +152,15 @@ def _worker_call(args):
         # Backward compatibility with notebooks/tests written before the
         # per-run period-candidate controls were exposed.
         args = (*args, None, None)
+    if len(args) == 17:
+        # Backward compatibility before reference-guided refits were exposed.
+        args = (*args, None, 0.0, 3)
     (
         sid, mode, init, period_fit, use_optim, adaptive_lam, use_refit,
         verbose, return_error, error_n_draws, error_random_state,
         error_robust, rms_ratio_limit, min_occupied_fraction, max_phase_gap,
-        K, harmonics,
+        K, harmonics, reference_period, reference_period_window,
+        reference_period_screen_order,
     ) = args
     from . import decomposition as decomp_mod
 
@@ -172,6 +176,9 @@ def _worker_call(args):
             verbose=verbose,
             K=K,
             harmonics=harmonics,
+            reference_period=reference_period,
+            reference_period_window=reference_period_window,
+            reference_period_screen_order=reference_period_screen_order,
         )
         if row is None:
             qa_record = make_qa_record(
@@ -222,6 +229,9 @@ def mp_run(
     max_phase_gap=None,
     K=None,
     harmonics=None,
+    reference_periods=None,
+    reference_period_window=0.0,
+    reference_period_screen_order=3,
     resume=True,
 ):
     """
@@ -232,6 +242,9 @@ def mp_run(
     - return_error=True: append only ML-facing R/phi values and HC3 errors
     - fit/HC3 failures and quality-review IDs go to a separate QA table
     - K/harmonics override the defaults for an explicit deep-refit pass
+    - reference_periods maps source ID -> trusted period and skips blind LS
+    - reference_period_window=0 fixes P; a positive fraction permits only a
+      bounded low-order local refinement around the trusted period
     """
 
     from . import decomposition as decomp_mod
@@ -277,6 +290,19 @@ def mp_run(
             raise ValueError(
                 f"Could not read completed IDs from {fd_output}; "
                 "repair the partial last row or use a new output path")
+
+    reference_map = None
+    if reference_periods is not None:
+        reference_map = {
+            str(key): float(value) for key, value in reference_periods.items()
+        }
+        missing_reference = [
+            str(sid) for sid in ids if str(sid) not in reference_map
+        ]
+        if missing_reference:
+            preview = ",".join(missing_reference[:5])
+            raise ValueError(
+                "reference_periods is missing selected IDs: " + preview)
     n_total = len(ids)
     n_ok, n_fail, n_review, n_feature_missing = 0, 0, 0, 0
     t0 = time.time()
@@ -297,6 +323,10 @@ def mp_run(
                         use_refit, verbose, return_error, error_n_draws,
                         error_random_state, error_robust, rms_ratio_limit,
                         min_occupied_fraction, max_phase_gap, K, harmonics,
+                        (reference_map[str(sid)]
+                         if reference_map is not None else None),
+                        reference_period_window,
+                        reference_period_screen_order,
                     )
                     for sid in ids
                 ),

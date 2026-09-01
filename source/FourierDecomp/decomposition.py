@@ -1,6 +1,6 @@
 import numpy as np
 
-from scipy.optimize import minimize
+from scipy.optimize import minimize, minimize_scalar
 from astropy.stats import sigma_clip
 
 from . import params
@@ -159,7 +159,15 @@ def slope_penalty(theta, args, M_fit, activated_bands,coef_mode=None, n_grid=50,
 def harmonics_penalty(theta, n_bands, M_fit, coef_mode=None, power=2.0):
     _, _, c1, c2, _, _ = unpack_theta(theta, n_bands, M_fit=M_fit, include_amp=True, coef_mode=coef_mode)
     orders2 = (1.0 + np.arange(M_fit))**power
-    return np.sum(orders2 * (c1**2 + c2**2))
+    # In alpha/beta form, alpha_j^2 + beta_j^2 = A_j^2.  In A/Q form the
+    # second vector contains phase angles, not another Cartesian coefficient;
+    # including Q_j^2 makes the penalty phase-origin dependent and can inflate
+    # the post-fit objective by many orders of magnitude.
+    if _coef_mode(coef_mode) == 'AQ':
+        harmonic_power = c1**2
+    else:
+        harmonic_power = c1**2 + c2**2
+    return np.sum(orders2 * harmonic_power)
 
 def adjust_lambda(lam0, gmax, M_fit, N, lam_min = 1e-5, lam_max = 1e-1):
     # Continuous phase-support-aware regularization weight.
@@ -406,11 +414,77 @@ def select_order(P0, args, activated_bands, phase_gaps, M_trunc,
     M_fit, score, chi2_red_opt, obj_opt, theta_opt = near[0] # choosen minimum
     return M_fit, theta_opt, chi2_red_opt, obj_opt, score
 
+# -----------------------------------------------------------------------------
+# Reference-guided period candidates
+# -----------------------------------------------------------------------------
+
+def _reference_period_candidates(
+        t, mag, emag, bands, reference_period, mode,
+        window_fraction=0.0, screen_order=3):
+    """Return a trusted catalog period and, optionally, one local refinement.
+
+    This path deliberately does not run a blind Lomb--Scargle search.  A
+    positive ``window_fraction`` minimizes a low-order robust fixed-period
+    score only inside ``P_ref * (1 +/- window_fraction)``.  The reference
+    period is always retained as a candidate so the local refinement must
+    improve the downstream Fourier fit to be selected.
+    """
+    reference_period = float(reference_period)
+    window_fraction = float(window_fraction)
+    if not np.isfinite(reference_period) or reference_period <= 0:
+        raise ValueError("invalid_reference_period")
+    if window_fraction < 0 or window_fraction >= 0.5:
+        raise ValueError("reference_period_window_fraction_must_be_in_[0,0.5)")
+
+    cfg = get_data_config(mode)
+    bands = np.asarray(bands).astype(str)
+    selected_filters = [
+        str(cfg.filters[index]) for index in cfg.activated_bands
+        if np.count_nonzero(bands == str(cfg.filters[index])) >= 2
+    ]
+    use = np.isin(bands, selected_filters)
+    baseline = float(np.ptp(np.asarray(t, dtype=float)[use]))
+    period_max = min(float(params.pmax), baseline * (1.0 - 1e-8))
+    if not (float(params.pmin) <= reference_period <= period_max):
+        raise ValueError(
+            "reference_period_outside_supported_range:"
+            f"P={reference_period},range=[{params.pmin},{period_max}]")
+    if window_fraction == 0.0:
+        return np.asarray([reference_period]), np.asarray([np.nan])
+
+    lower = max(float(params.pmin), reference_period * (1.0 - window_fraction))
+    upper = min(period_max, reference_period * (1.0 + window_fraction))
+    if not lower < upper:
+        return np.asarray([reference_period]), np.asarray([np.nan])
+
+    # Imported lazily to avoid adding catalog-level dependencies to the
+    # ordinary blind-fit path.
+    from .catalog import _fixed_period_robust_score
+
+    def objective(period):
+        return _fixed_period_robust_score(
+            np.asarray(t), np.asarray(mag), np.asarray(emag), bands,
+            float(period), selected_filters, order=int(screen_order))
+
+    result = minimize_scalar(
+        objective, bounds=(lower, upper), method="bounded",
+        options={"xatol": max(reference_period * 1e-8, 1e-10)})
+    candidates = [reference_period]
+    if result.success and np.isfinite(result.fun):
+        candidates.append(float(result.x))
+    candidates = np.asarray(candidates, dtype=float)
+    keep = np.r_[True, np.abs(np.diff(np.log(candidates))) > 1e-10]
+    candidates = candidates[keep]
+    return candidates, np.full(candidates.size, np.nan)
+
+
 # === Main Function ===
 def fourier_decomp(sid, mode='ogle', init='lasso',
                    period_fit=False, use_optim=False, adaptive_lam=False, use_refit=False,
                    verbose=False, plot_LS=False, K=None, harmonics=None,
-                   epoch_data=None):
+                   epoch_data=None, reference_period=None,
+                   reference_period_window=0.0,
+                   reference_period_screen_order=3):
     # Load data
     if mode is None: mode = get_data_config().mode
     cfg = get_data_config(mode)
@@ -472,6 +546,14 @@ def fourier_decomp(sid, mode='ogle', init='lasso',
     # 1) initial period
     # =====================================
     theta0_rrfit = None
+    if reference_period is not None and init == 'rrfit':
+        raise ValueError(
+            "reference_period and init='rrfit' are mutually exclusive")
+    if reference_period is not None and period_fit:
+        raise ValueError(
+            "reference-guided refit requires period_fit=False; use "
+            "reference_period_window for bounded local refinement")
+
     if init == 'rrfit':
         if df_rrfit is None:
             raise ValueError("init='rrfit' requires rrfit result file.")
@@ -499,6 +581,19 @@ def fourier_decomp(sid, mode='ogle', init='lasso',
         Zmax = np.nan
 
         if verbose: print(f'RRFit period = {P0:.4f}d / E = {E0:.4f}')
+    elif reference_period is not None:
+        P0s, Zs = _reference_period_candidates(
+            t, mag, emag, bands, reference_period=reference_period,
+            mode=mode, window_fraction=reference_period_window,
+            screen_order=reference_period_screen_order)
+        Zmax = np.nan
+        if verbose:
+            strategy = (
+                "fixed" if float(reference_period_window) == 0.0
+                else f"local +/-{100 * float(reference_period_window):.3g}%")
+            print(
+                f'Reference-guided period ({strategy}) = {P0s}; '
+                'blind Lomb-Scargle skipped')
     else:
         P0s, Zs = robust_period_search(t, mag, emag, bands, 
                                     n0=params.n0, K=K, harmonics=harmonics,
