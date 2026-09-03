@@ -540,7 +540,8 @@ def run_rrfit(sids, rrfit_exe, outdir, workdir=None, mode=None, fitlc_list=None,
                         "p0flag": r["p0flag"],
                         "returncode": r["returncode"],
                         "result_ok": r["result"] is not None,
-                        "stderr": r["stderr"][:500] if isinstance(r["stderr"], str) else "",
+                        "stderr": (str(r["stderr"]).replace("\r", "\\r").replace("\n", "\\n")[:2000]
+                                   if r.get("stderr") is not None else ""),
                     })
 
                     # If all jobs have finished for a given source
