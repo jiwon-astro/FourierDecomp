@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 from multiprocessing import Manager, get_context
 from datetime import datetime, timezone
 import hashlib
