@@ -865,8 +865,14 @@ def fit_period_candidates(
     use_optim: bool = True,
     adaptive_lam: bool = True,
     use_refit: bool = True,
+    verbose: bool = False,
 ) -> pd.DataFrame:
-    """Run fixed/local-period FD candidates for one already-loaded source."""
+    """Run fixed/local-period FD candidates for one already-loaded source.
+
+    The function intentionally handles exactly one source.  With ``verbose``
+    enabled it shows candidate-level progress while keeping the nonlinear
+    fitter's detailed output quiet.
+    """
 
     from .IO import build_fd_header
     from .catalog import (
@@ -891,7 +897,14 @@ def fit_period_candidates(
     output = []
     header = build_fd_header(mode)
     epoch_data = epoch_arrays(ls_data, sid_native, mode=mode, monitor=False)
-    for candidate in candidate_frame.to_dict(orient="records"):
+    candidate_records = candidate_frame.to_dict(orient="records")
+    if verbose:
+        from tqdm.auto import tqdm
+
+        candidate_records = tqdm(
+            candidate_records, total=len(candidate_records),
+            desc=f"source {source_id}: fixed-period FD", unit="candidate")
+    for candidate in candidate_records:
         requested = float(candidate["period"])
         prefix = {
             "candidate_id": candidate.get("candidate_id", ""),
@@ -933,4 +946,11 @@ def fit_period_candidates(
                 "candidate_fit_reason": repr(exc), "P": np.nan,
             })
         output.append(record)
+        if verbose and hasattr(candidate_records, "set_postfix"):
+            candidate_records.set_postfix(
+                candidate=prefix["candidate_id"],
+                P=f"{requested:.6g}",
+                status=record["candidate_fit_status"],
+                refresh=False,
+            )
     return pd.DataFrame(output)

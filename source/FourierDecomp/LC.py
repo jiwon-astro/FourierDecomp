@@ -295,7 +295,7 @@ def plot_source_period_review(
     nrows = len(fitted)
     ncols = len(cfg.filters)
     fig, axes = plt.subplots(
-        nrows, ncols, figsize=(4.6 * ncols, 3.0 * nrows),
+        nrows, ncols, figsize=(4.9 * ncols, 3.4 * nrows),
         squeeze=False, constrained_layout=True)
     for i, record in fitted.iterrows():
         period = float(record["P"])
@@ -305,8 +305,15 @@ def plot_source_period_review(
             record[f"A{k}"] for k in range(1, order + 1)], dtype=float)
         q = np.asarray([
             record[f"Q{k}"] for k in range(1, order + 1)], dtype=float)
-        phase_grid = np.linspace(0.0, float(phase_cycles), 700)
-        template = H((a, q), phase_grid, M_fit=order, coef_mode="AQ")
+        # Evaluate exactly one complete Fourier cycle, then repeat it.  H()
+        # wraps its phase argument in-place, so passing a 0--2 grid directly
+        # would reset the x coordinates at phase 1 and draw a folded-back line.
+        phase_unit = np.linspace(0.0, 1.0, 401, endpoint=True)
+        template_unit = H(
+            (a, q), phase_unit.copy(), M_fit=order, coef_mode="AQ")
+        phase_curve = np.concatenate([
+            phase_unit + cycle for cycle in range(phase_cycles)])
+        template_curve = np.tile(template_unit, phase_cycles)
         for j, band in enumerate(cfg.filters):
             band = str(band)
             ax = axes[i, j]
@@ -324,22 +331,27 @@ def plot_source_period_review(
             amp = float(record.get(f"amp_{band}", np.nan))
             if np.isfinite(m0) and np.isfinite(amp):
                 ax.plot(
-                    phase_grid, m0 + amp * template,
+                    phase_curve, m0 + amp * template_curve,
                     color="#E69F00", lw=1.8)
             ax.invert_yaxis()
             ax.grid(alpha=0.15)
+            ax.set_xlim(0.0, float(phase_cycles))
             ax.set_xlabel("phase")
             ax.set_ylabel(f"{band} [mag]")
             if i == 0:
                 ax.set_title(band.upper())
         label = record.get("candidate_id", f"P{i + 1}")
         axes[i, 0].text(
-            0.02, 0.04,
-            f"{label}: P={period:.8g} d, M={order}, "
-            f"rms/sig={record.get('rms_ratio_max', np.nan):.3f}, "
+            0.025, 0.035,
+            f"{label}:  P={period:.8g} d   |   M={order}\n"
+            f"rms/sig={record.get('rms_ratio_max', np.nan):.3f}   |   "
             f"time-CV={record.get('cv_rmse', np.nan):.3f} mag",
-            transform=axes[i, 0].transAxes, fontsize=8,
-            bbox={"facecolor": "white", "alpha": 0.78, "edgecolor": "0.8"})
+            transform=axes[i, 0].transAxes, fontsize=9.5,
+            ha="left", va="bottom", linespacing=1.25,
+            bbox={
+                "boxstyle": "round,pad=0.42", "facecolor": "white",
+                "alpha": 0.88, "edgecolor": "0.72", "linewidth": 0.8,
+            })
     fig.suptitle(f"Gaia source {source_id}: period-candidate fixed-FD review")
     if output_path is not None:
         output_path = Path(output_path)
