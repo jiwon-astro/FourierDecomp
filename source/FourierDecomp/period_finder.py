@@ -1,5 +1,7 @@
 import numpy as np
+import pandas as pd
 import matplotlib.pyplot as plt
+from typing import Any, Sequence
 
 from gatspy import periodic # multiband lomb-scargle
 from scipy.signal import find_peaks, peak_prominences
@@ -324,3 +326,136 @@ def plot_LS(freqs, periods, Pf_LS, peaks = None, thresh = None):
         ax[1].scatter(Ps, Zs,marker='+',color='r')
         
     plt.tight_layout()
+
+
+# -----------------------------------------------------------------------------
+# Period-candidate review helpers
+# -----------------------------------------------------------------------------
+
+def build_period_candidate_bank(
+    source_id: Any,
+    *,
+    base_period: float,
+    gaia_period: float | None = None,
+    rrfit_periods: Sequence[float] = (),
+    ls_periods: Sequence[float] = (),
+    manual_periods: Sequence[float] = (),
+    include_half_double: bool = True,
+    log_tolerance: float = 1e-4,
+) -> pd.DataFrame:
+    """Collect and deduplicate named period candidates for one source."""
+
+    records: list[tuple[str, float]] = [("base", base_period)]
+    if gaia_period is not None:
+        records.append(("gaia", gaia_period))
+    records.extend((f"rrfit_{i + 1}", value) for i, value in enumerate(rrfit_periods))
+    records.extend((f"ls_{i + 1}", value) for i, value in enumerate(ls_periods))
+    records.extend((f"manual_{i + 1}", value) for i, value in enumerate(manual_periods))
+    if include_half_double:
+        records.extend([
+            ("base_half", 0.5 * float(base_period)),
+            ("base_double", 2.0 * float(base_period)),
+        ])
+    combined: list[dict[str, Any]] = []
+    for label, value in records:
+        try:
+            period = float(value)
+        except (TypeError, ValueError):
+            continue
+        if not np.isfinite(period) or period <= 0:
+            continue
+        match = next((
+            row for row in combined
+            if abs(np.log10(period / row["period"])) <= log_tolerance
+        ), None)
+        if match is None:
+            combined.append({
+                "ID": str(source_id), "candidate": label,
+                "period": period, "sources": label,
+            })
+        else:
+            match["sources"] += ";" + label
+    out = pd.DataFrame(combined)
+    if len(out):
+        out["ratio_to_base"] = out["period"] / float(base_period)
+        out.insert(1, "candidate_id", [f"P{i + 1}" for i in range(len(out))])
+    return out
+
+
+def blocked_time_cv_period_score(
+    epoch_data: tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray],
+    period: float,
+    *,
+    order: int = 3,
+    n_splits: int = 5,
+) -> dict[str, float | int]:
+    """Score a period with low-order fits held out in contiguous time blocks."""
+
+    t, mag, emag, bands = [np.asarray(value) for value in epoch_data]
+    bands = bands.astype(str)
+    if not np.isfinite(period) or period <= 0:
+        raise ValueError("period must be positive")
+    residuals: list[np.ndarray] = []
+    weights: list[np.ndarray] = []
+    output: dict[str, float | int] = {}
+    folds_used = 0
+    for band in np.unique(bands):
+        mask = (
+            (bands == band) & np.isfinite(t) & np.isfinite(mag)
+            & np.isfinite(emag) & (emag > 0))
+        tb, yb, eb = t[mask], mag[mask], emag[mask]
+        if len(tb) < max(8, 2 * int(order) + 3):
+            output[f"cv_rmse_{band}"] = np.nan
+            continue
+        sorter = np.argsort(tb)
+        tb, yb, eb = tb[sorter], yb[sorter], eb[sorter]
+        band_residuals, band_weights = [], []
+        for test_index in np.array_split(
+            np.arange(len(tb)), min(int(n_splits), len(tb))
+        ):
+            if not len(test_index):
+                continue
+            train_mask = np.ones(len(tb), dtype=bool)
+            train_mask[test_index] = False
+            supported_order = min(
+                int(order), int((train_mask.sum() - 1) // 2))
+            if supported_order < 1:
+                continue
+            harmonic = 1 + np.arange(supported_order)
+
+            def design(values):
+                phase = (
+                    2.0 * np.pi * (values / float(period))[:, None] * harmonic)
+                return np.column_stack([
+                    np.ones(len(values)), np.cos(phase), np.sin(phase)])
+
+            x_train = design(tb[train_mask])
+            weight_train = 1.0 / np.maximum(eb[train_mask], 1e-3) ** 2
+            root_weight = np.sqrt(weight_train)
+            solution = np.linalg.lstsq(
+                x_train * root_weight[:, None],
+                yb[train_mask] * root_weight, rcond=None)[0]
+            prediction = design(tb[test_index]) @ solution
+            band_residuals.append(yb[test_index] - prediction)
+            band_weights.append(1.0 / np.maximum(eb[test_index], 1e-3) ** 2)
+            folds_used += 1
+        if band_residuals:
+            band_residual = np.concatenate(band_residuals)
+            band_weight = np.concatenate(band_weights)
+            output[f"cv_rmse_{band}"] = float(
+                np.sqrt(np.mean(band_residual**2)))
+            residuals.append(band_residual)
+            weights.append(band_weight)
+        else:
+            output[f"cv_rmse_{band}"] = np.nan
+    if residuals:
+        residual = np.concatenate(residuals)
+        weight = np.concatenate(weights)
+        output["cv_rmse"] = float(np.sqrt(np.mean(residual**2)))
+        output["cv_weighted_rmse"] = float(
+            np.sqrt(np.average(residual**2, weights=weight)))
+        output["cv_n"] = int(len(residual))
+    else:
+        output.update({"cv_rmse": np.nan, "cv_weighted_rmse": np.nan, "cv_n": 0})
+    output["cv_folds_used"] = int(folds_used)
+    return output

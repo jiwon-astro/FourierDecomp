@@ -1,8 +1,9 @@
 
 import numpy as np
 import pandas as pd
+import hashlib
 from dataclasses import dataclass
-from typing import Optional, Union
+from typing import Any, Iterable, Optional, Union
 from tqdm.notebook import tqdm
 from concurrent.futures import ThreadPoolExecutor  # Threading
 from pathlib import Path
@@ -587,3 +588,42 @@ def prepare_fitlc(sid, mode='gaia', ls_data=None, fitlc_path=None, workdir=None)
                        t=t, mag=mag, emag=emag, bands=bands)
     
     raise ValueError("Either fitlc_path or ls_data must be provided.")
+
+
+def prepare_gaia_revision_session(
+    source_ids: Iterable[Any],
+    gaia_query_catalog: str | Path,
+    phot_dir: str | Path,
+    cache_dir: str | Path,
+    *,
+    max_workers: int = 12,
+    chunk_size: int = 500,
+):
+    """Load only requested Gaia epoch files and wire the decomposition module."""
+
+    from . import decomposition
+
+    source_keys = list(dict.fromkeys(str(sid) for sid in source_ids))
+    query = Table.read(gaia_query_catalog)
+    query_ids = np.asarray(query["SOURCE_ID"]).astype(str)
+    mask = np.isin(query_ids, source_keys)
+    missing = sorted(set(source_keys) - set(query_ids[mask]))
+    if missing:
+        raise ValueError(f"Gaia query catalog is missing IDs: {missing[:5]}")
+    selected = query[mask]
+    order = {sid: index for index, sid in enumerate(source_keys)}
+    selected = selected[np.argsort([
+        order[str(value)] for value in selected["SOURCE_ID"]
+    ])]
+    cache_dir = Path(cache_dir)
+    cache_dir.mkdir(parents=True, exist_ok=True)
+    digest = hashlib.sha256(
+        "\n".join(source_keys).encode("utf-8")).hexdigest()[:12]
+    ident_path = cache_dir / f"gaia_revision_sources_{digest}.ecsv"
+    if not ident_path.exists():
+        selected.write(ident_path, format="ascii.ecsv", overwrite=False)
+    df_ident, ls_data = data_loader(
+        ident_path, phot_dir, mode="gaia",
+        max_workers=max_workers, chunk_size=chunk_size)
+    wire_globals(decomposition, ls_data, df_ident)
+    return df_ident, ls_data, ident_path

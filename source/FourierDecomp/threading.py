@@ -1,8 +1,13 @@
 from multiprocessing import Manager, get_context
+from datetime import datetime, timezone
+import hashlib
+import json
 from pathlib import Path
 from tqdm.notebook import tqdm
+from typing import Any
 import csv
 import time
+import pandas as pd
 
 from .params import period_fit, use_optim, adaptive_lam, use_refit, mode_default, init
 from .IO import build_fd_header, epoch_arrays
@@ -20,6 +25,8 @@ from .catalog import (
     nan_error_record,
     period_audit_values,
     qa_values,
+    file_sha256,
+    revision_jobs_from_manifest,
 )
 
 def _init_worker(ls_data, df_ident, df_rrfit, templates):
@@ -735,3 +742,73 @@ def thread_run(fd_output, ids, period_fit = period_fit,
     finally:
         pbar.close() 
         f_out.close() # close file pointer
+
+
+def run_manifest_refits(
+    manifest: str | Path | pd.DataFrame,
+    base_catalog: str | Path | pd.DataFrame,
+    output_dir: str | Path,
+    *,
+    max_workers: int = 8,
+    chunksize: int = 1,
+    reference_period_window: float = 0.0,
+    return_error: bool = True,
+    error_n_draws: int = 4000,
+    error_random_state: int = 0,
+    overwrite_request: bool = False,
+) -> dict[str, Any]:
+    """Refit explicit manifest jobs, guarded by a resumable request hash."""
+
+    ids, period_map = revision_jobs_from_manifest(
+        manifest, base_catalog=base_catalog)
+    if not ids:
+        raise ValueError("No adopt_period/refit_same_period jobs in manifest")
+    output_dir = Path(output_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
+    request_path = output_dir / "refit_request_manifest.json"
+    output_path = output_dir / (
+        "gaia_fd_revision_refit_with_err.dat"
+        if return_error else "gaia_fd_revision_refit.dat")
+    qa_path = output_dir / "gaia_fd_revision_refit_qa.dat"
+    request = {
+        "schema": "gaia-fd-manual-refit-request-v1",
+        "base_catalog": (
+            str(Path(base_catalog).resolve())
+            if not isinstance(base_catalog, pd.DataFrame) else "dataframe"),
+        "base_sha256": (
+            file_sha256(base_catalog)
+            if not isinstance(base_catalog, pd.DataFrame) else None),
+        "periods": period_map,
+        "reference_period_window": float(reference_period_window),
+        "return_error": bool(return_error),
+        "error_n_draws": int(error_n_draws),
+        "error_random_state": int(error_random_state),
+    }
+    request_hash = hashlib.sha256(
+        json.dumps(request, sort_keys=True).encode("utf-8")).hexdigest()
+    request["request_sha256"] = request_hash
+    if request_path.exists() and not overwrite_request:
+        previous = json.loads(request_path.read_text(encoding="utf-8"))
+        if previous.get("request_sha256") != request_hash:
+            raise ValueError(
+                "Existing refit output belongs to a different decision manifest; "
+                "use a new output directory")
+    else:
+        request["created_utc"] = datetime.now(timezone.utc).replace(
+            microsecond=0).isoformat()
+        request_path.write_text(json.dumps(request, indent=2), encoding="utf-8")
+    result = mp_run(
+        output_path, ids, mode="gaia", init="lsq", period_fit=False,
+        use_optim=True, adaptive_lam=True, use_refit=True,
+        max_workers=max_workers, chunksize=chunksize, mp_context="spawn",
+        return_error=return_error, error_n_draws=error_n_draws,
+        error_random_state=error_random_state, qa_output=qa_path,
+        reference_periods=period_map,
+        reference_period_window=reference_period_window,
+        resume=True,
+    )
+    result.update({
+        "request_manifest": str(request_path),
+        "request_sha256": request_hash,
+    })
+    return result

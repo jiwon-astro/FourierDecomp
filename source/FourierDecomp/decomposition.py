@@ -1,4 +1,6 @@
 import numpy as np
+import pandas as pd
+from typing import Any, Sequence
 
 from scipy.optimize import minimize, minimize_scalar
 from astropy.stats import sigma_clip
@@ -847,3 +849,86 @@ def fourier_decomp(sid, mode='ogle', init='lasso',
 
     m0, amp, A_fit, Q_fit, P, E = unpack_theta(theta_opt_final, n_bands, M_fit=M_fit_final, include_amp=True)
     """
+
+
+def fit_period_candidates(
+    source_id: Any,
+    candidates: pd.DataFrame | Sequence[float],
+    *,
+    mode: str = "gaia",
+    reference_period_window: float = 0.0,
+    include_hc3: bool = False,
+    hc3_n_draws: int = 1000,
+    random_state: int = 0,
+    use_optim: bool = True,
+    adaptive_lam: bool = True,
+    use_refit: bool = True,
+) -> pd.DataFrame:
+    """Run fixed/local-period FD candidates for one already-loaded source."""
+
+    from .IO import build_fd_header
+    from .catalog import (
+        add_fourier_invariants,
+        assess_nominal_fit_quality,
+        compute_minimal_hc3_errors,
+    )
+    from .period_finder import blocked_time_cv_period_score
+
+    sid_native = int(source_id) if str(source_id).isdigit() else source_id
+    if isinstance(candidates, pd.DataFrame):
+        candidate_frame = candidates.copy()
+        if "period" not in candidate_frame:
+            raise ValueError("candidate table must contain period")
+    else:
+        candidate_frame = pd.DataFrame({
+            "candidate_id": [f"P{i + 1}" for i in range(len(candidates))],
+            "candidate": "manual",
+            "period": list(candidates),
+        })
+
+    output = []
+    header = build_fd_header(mode)
+    epoch_data = epoch_arrays(ls_data, sid_native, mode=mode, monitor=False)
+    for candidate in candidate_frame.to_dict(orient="records"):
+        requested = float(candidate["period"])
+        prefix = {
+            "candidate_id": candidate.get("candidate_id", ""),
+            "candidate": candidate.get("candidate", "manual"),
+            "candidate_sources": candidate.get(
+                "sources", candidate.get("candidate", "manual")),
+            "period_requested": requested,
+        }
+        prefix.update(blocked_time_cv_period_score(epoch_data, requested))
+        try:
+            row = fourier_decomp(
+                sid_native, mode=mode, init="lsq", period_fit=False,
+                use_optim=use_optim, adaptive_lam=adaptive_lam,
+                use_refit=use_refit, verbose=False,
+                reference_period=requested,
+                reference_period_window=reference_period_window,
+                epoch_data=epoch_data,
+            )
+            if row is None:
+                raise RuntimeError("fourier_decomp_returned_none")
+            record = dict(zip(header, row))
+            record = add_fourier_invariants(
+                pd.DataFrame([record])).iloc[0].to_dict()
+            qa = assess_nominal_fit_quality(
+                sid_native, record, mode=mode, epoch_data=epoch_data)
+            record.update(prefix)
+            record["candidate_fit_status"] = qa["status"]
+            record["candidate_fit_reason"] = qa["reason"]
+            for name in ("rms_ratio_max", "occupied_fraction_min", "gmax_max"):
+                record[name] = qa.get(name, np.nan)
+            if include_hc3:
+                record.update(compute_minimal_hc3_errors(
+                    sid_native, record, mode=mode, epoch_data=epoch_data,
+                    n_draws=hc3_n_draws, random_state=random_state))
+        except Exception as exc:
+            record = dict(prefix)
+            record.update({
+                "ID": str(source_id), "candidate_fit_status": "failed",
+                "candidate_fit_reason": repr(exc), "P": np.nan,
+            })
+        output.append(record)
+    return pd.DataFrame(output)

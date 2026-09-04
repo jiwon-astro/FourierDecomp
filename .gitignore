@@ -6,6 +6,10 @@ __pycache__/
 # Distribution / packaging
 .Python
 tests/
+# Keep the provenance/revision workflow regression test with the source.
+!tests/
+tests/*
+!tests/test_fd_revision_workflow.py
 build/
 develop-eggs/
 dist/

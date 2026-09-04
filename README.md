@@ -73,6 +73,39 @@ missing source is appended; an existing source is replaced only by an accepted
 refit.  The complete executable sequence is in
 `Fourier_Decomposition_Reliability_Workflow.ipynb`.
 
+## Gaia catalog review and manual revision
+
+`Analysis_FD_Revision.ipynb` uses the existing package modules according to
+their responsibilities.  The expensive raw-light-curve work stays out of the
+catalog-wide first pass:
+
+```python
+from FourierDecomp import catalog, decomposition, IO, LC, period_finder, threading
+
+audit = catalog.build_gaia_fit_quality_table(...)
+candidates = period_finder.build_period_candidate_bank(...)
+IO.prepare_gaia_revision_session(...)
+fits = decomposition.fit_period_candidates(...)
+LC.plot_source_period_review(...)
+threading.run_manifest_refits(...)
+catalog.merge_manifest_revisions(...)
+```
+
+Catalog QA, decisions, and provenance-safe merging live in `catalog.py`;
+period candidates and time-block cross-validation in `period_finder.py`;
+candidate decomposition in `decomposition.py`; source plots in `LC.py`;
+selective epoch loading in `IO.py`; and parallel manifest refits in
+`threading.py`.
+
+The audit combines local residual/coverage diagnostics with Gaia SOS
+`r21_g`/`r31_g`.  The SOS values are external review triggers only and are
+compared only when the local and Gaia periods agree.  A small CSV decision
+ledger records `keep_base`, `refit_same_period`, `adopt_period`,
+`exclude_supervised`, or `defer` for each reviewed source.  Only explicit refit
+decisions load epoch photometry, and resumable refits are protected by hashes
+of the base catalog and requested periods.  The final merge always writes a new
+catalog plus a row-level audit and supervised-training exclusion list.
+
 The reference-free period audit was checked against the available OGLE LMC
 catalog periods as an exploratory regression: with the conservative defaults,
 it selected about 68% of the discrepant solutions in that comparison while

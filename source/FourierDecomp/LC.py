@@ -1,5 +1,7 @@
 import numpy as np
+import pandas as pd
 import matplotlib.pyplot as plt
+from pathlib import Path
 from . import params
 from .IO import phot_names, epoch_arrays, get_data_config
 from .uncertainty import (
@@ -263,3 +265,82 @@ def plot_lc_conditional_ci(sid, P, E, M_fit, mode='ogle',
     if savepath is not None:
         fig.savefig(savepath, dpi=300, bbox_inches='tight')
     return fig, axes, diagnostics
+
+
+def plot_source_period_review(
+    source_id,
+    candidate_fits: pd.DataFrame,
+    *,
+    mode: str = "gaia",
+    output_path: str | Path | None = None,
+    phase_cycles: int = 2,
+):
+    """Plot raw G/BP/RP folds and fitted curves on candidate panels."""
+
+    from . import decomposition
+    from .LSQ import H
+
+    cfg = get_data_config(mode)
+    sid_native = int(source_id) if str(source_id).isdigit() else source_id
+    t, mag, emag, bands = epoch_arrays(
+        decomposition.ls_data, sid_native, mode=mode, monitor=False)
+    bands = np.asarray(bands).astype(str)
+    fitted = candidate_fits.loc[
+        candidate_fits["candidate_fit_status"].ne("failed")].reset_index(drop=True)
+    if fitted.empty:
+        raise ValueError("No successful candidate fit to plot")
+
+    nrows = len(fitted)
+    ncols = len(cfg.filters)
+    fig, axes = plt.subplots(
+        nrows, ncols, figsize=(4.6 * ncols, 3.0 * nrows),
+        squeeze=False, constrained_layout=True)
+    for i, record in fitted.iterrows():
+        period = float(record["P"])
+        epoch = float(record["E"])
+        order = int(record["M_fit"])
+        a = np.asarray([
+            record[f"A{k}"] for k in range(1, order + 1)], dtype=float)
+        q = np.asarray([
+            record[f"Q{k}"] for k in range(1, order + 1)], dtype=float)
+        phase_grid = np.linspace(0.0, float(phase_cycles), 700)
+        template = H((a, q), phase_grid, M_fit=order, coef_mode="AQ")
+        for j, band in enumerate(cfg.filters):
+            band = str(band)
+            ax = axes[i, j]
+            mask = bands == band
+            phase = ((t[mask] - epoch) / period) % 1.0
+            phase = np.concatenate([
+                phase + cycle for cycle in range(phase_cycles)])
+            y = np.tile(mag[mask], phase_cycles)
+            yerr = np.tile(emag[mask], phase_cycles)
+            ax.errorbar(
+                phase, y, yerr=yerr, fmt=cfg.lc_markers[j], ms=3.1,
+                color=cfg.lc_colors[j], ecolor=cfg.lc_colors[j], alpha=0.72,
+                elinewidth=0.55, capsize=0)
+            m0 = float(record.get(f"m0_{band}", np.nan))
+            amp = float(record.get(f"amp_{band}", np.nan))
+            if np.isfinite(m0) and np.isfinite(amp):
+                ax.plot(
+                    phase_grid, m0 + amp * template,
+                    color="#E69F00", lw=1.8)
+            ax.invert_yaxis()
+            ax.grid(alpha=0.15)
+            ax.set_xlabel("phase")
+            ax.set_ylabel(f"{band} [mag]")
+            if i == 0:
+                ax.set_title(band.upper())
+        label = record.get("candidate_id", f"P{i + 1}")
+        axes[i, 0].text(
+            0.02, 0.04,
+            f"{label}: P={period:.8g} d, M={order}, "
+            f"rms/sig={record.get('rms_ratio_max', np.nan):.3f}, "
+            f"time-CV={record.get('cv_rmse', np.nan):.3f} mag",
+            transform=axes[i, 0].transAxes, fontsize=8,
+            bbox={"facecolor": "white", "alpha": 0.78, "edgecolor": "0.8"})
+    fig.suptitle(f"Gaia source {source_id}: period-candidate fixed-FD review")
+    if output_path is not None:
+        output_path = Path(output_path)
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        fig.savefig(output_path, dpi=180, bbox_inches="tight")
+    return fig
