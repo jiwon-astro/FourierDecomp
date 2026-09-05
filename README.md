@@ -6,6 +6,66 @@ Direct Fourier decomposition for multi-band Cepheid variable light curves
 
 This code is adopted to analyze the [OGLE IV](https://ogledb.astrouw.edu.pl/~ogle/OCVS/) light curves of Cepheid/RR Lyrae variables.
 
+## RRFit search and fixed-period verification
+
+RRFit search and post-review verification are deliberately different modes.
+The ordinary `run_rrfit` plan includes a full period-range job plus narrower
+Lomb--Scargle/window-alias jobs for each requested band pair.  RRFit optimizes
+the period inside each job range.
+
+After a human period decision, pass an ID-to-period mapping as
+`fixed_periods`.  The generated Fortran inputs use `pmin == pmax`, so period is
+constant while template identity, epoch, amplitudes, and mean magnitudes are
+fit.  Use separate output directories for the base-period control and the
+revised-period run; resumable plans are checked against the mapping and are
+not silently reused with changed periods.
+
+```python
+RRFit.run_rrfit(
+    source_ids, rrfit_exe, revised_outdir,
+    workdir=revised_workdir, mode="gaia", ls_data=ls_data,
+    bandpairs=(("g", "rp"), ("g", "bp")),
+    fixed_periods=adopted_periods, posfixs="revised_fixed",
+    max_workers=16, resume=True,
+)
+```
+
+`LC.write_rrfit_review_pdfs` produces restartable one-source PDFs from saved
+RRFit summaries without running Fourier decomposition.
+
+## Class-agnostic soft shape anchor
+
+`init="rrfit"` uses only the RRFit period and epoch as numerical starting
+information.  RRFit template coefficients and template identity are not used
+as a Fourier-shape prior, and the template bank is not required by
+`fourier_decomp`.  This keeps the decomposition independent of a variability
+class or subtype assumption.
+
+An experimental same-lightcurve regularizer can be enabled explicitly:
+
+```python
+row = decomposition.fourier_decomp(
+    source_id,
+    mode="gaia",
+    init="rrfit",
+    period_fit=False,
+    use_optim=True,
+    adaptive_lam=True,
+    use_refit=True,
+    soft_anchor_lambda=0.1,
+    soft_anchor_order=3,
+    soft_anchor_tolerance=0.05,
+    soft_anchor_global_floor=0.05,
+    soft_anchor_min_gap=0.10,
+)
+```
+
+The anchor is a robust low-order fit to the same input epochs.  Its Huber
+penalty is weak where phases are sampled and stronger inside unsupported
+gaps.  `soft_anchor_lambda=0` is the canonical default; the experimental
+option must be validated on source-disjoint dense-reference degradation data
+before catalog use.
+
 ## Fit reliability and uncertainty
 
 `FourierDecomp.uncertainty` contains two uncertainty levels:

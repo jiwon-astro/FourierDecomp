@@ -270,7 +270,8 @@ def refit_m0_amp(h_ft, mag_ft, w_ft, opt_method='lsq', m0_init=None, amp_init=No
     return m0, amp, chi2
 
 def LSQ_fit(P0, args, M_fit, activated_bands, opt_method='lsq', quality_weight=False,
-             bounds=None, phase_flag=None, Nmin=50, lam=1e-3, coef_mode=None): # M_fit
+             bounds=None, phase_flag=None, Nmin=50, lam=1e-3, coef_mode=None,
+             epoch0=None): # M_fit
     # phase_flag: having a large phase gap in the phase-folded light curve
     coef_mode = _coef_mode(coef_mode)
     n_bands = len(activated_bands)
@@ -281,7 +282,10 @@ def LSQ_fit(P0, args, M_fit, activated_bands, opt_method='lsq', quality_weight=F
     alpha_accum = np.zeros(M_fit) # M_fit, AcosQ
     beta_accum = np.zeros(M_fit) # M_fit,  AsinQ
     count = np.zeros(M_fit)   # M_fit
-    E0 = None
+    # ``epoch0`` only fixes the numerical phase origin used by the linear
+    # Fourier initializer.  It does not prescribe a light-curve morphology:
+    # all harmonic coefficients are still estimated from the supplied data.
+    E0 = None if epoch0 is None else float(epoch0)
     eps = 1e-6
 
     for i, ib in enumerate(activated_bands):

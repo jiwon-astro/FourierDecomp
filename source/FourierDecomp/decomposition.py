@@ -66,6 +66,225 @@ def spike_penalty(theta, n_bands, M_fit, coef_mode=None, n_grid=50, ratio=0.05):
     # spike penalty: (1) localized spike term (2) overall roughness 
     return np.percentile(np.abs(d2), 99)**2 + ratio * np.mean(d2**2)
 
+
+def _phase_gap_interior_weights(phase, phase_grid, min_gap=0.10,
+                                edge_fraction=0.15):
+    """Weight only the interiors of unsupported circular phase gaps.
+
+    The weight rises smoothly from zero at observed gap boundaries to one at
+    the gap centre.  Consequently a well-sampled, genuinely sharp Cepheid tip
+    is not penalized merely because it has high curvature.
+    """
+
+    phase = np.unique(np.mod(np.asarray(phase, dtype=float), 1.0))
+    grid = np.mod(np.asarray(phase_grid, dtype=float), 1.0)
+    weights = np.zeros(grid.size, dtype=float)
+    if phase.size < 2:
+        return np.ones(grid.size, dtype=float)
+    phase = np.sort(phase)
+    left = phase
+    right = np.r_[phase[1:], phase[0] + 1.0]
+    for start, stop in zip(left, right):
+        width = float(stop - start)
+        if width < float(min_gap):
+            continue
+        coordinate = np.mod(grid - start, 1.0)
+        inside = coordinate < width
+        if not np.any(inside):
+            continue
+        u = coordinate[inside] / width
+        edge = float(np.clip(edge_fraction, 0.0, 0.49))
+        interior = (u >= edge) & (u <= 1.0 - edge)
+        local = np.zeros_like(u)
+        local[interior] = np.sin(np.pi * u[interior]) ** 2
+        weights[inside] = np.maximum(weights[inside], local)
+    return weights
+
+
+def _normalize_unit_shape(curve, percentile=(1.0, 99.0)):
+    """Center and peak-to-peak normalize a periodic shape."""
+
+    curve = np.asarray(curve, dtype=float)
+    centre = float(np.nanmean(curve))
+    lo, hi = np.nanpercentile(curve, percentile)
+    scale = float(hi - lo)
+    if not np.isfinite(scale) or scale <= np.finfo(float).eps:
+        return np.zeros_like(curve)
+    return (curve - centre) / scale
+
+
+def build_data_driven_soft_anchor(
+        P0, args, activated_bands, epoch0=None, order=3, n_grid=200,
+        clip_sigma=4.0, clip_iterations=2, min_gap=0.10,
+        edge_fraction=0.15, global_floor=0.05, tolerance=0.05,
+        coef_mode=None):
+    """Build a class-agnostic low-order shape anchor from the same data.
+
+    This is deliberately *not* an RRFit-template or Cepheid-template prior.
+    RRFit may supply only the trial period and numerical phase origin.  The
+    reference shape is a low-order shared-band Fourier fit estimated from the
+    input epochs themselves, with a small amount of residual clipping.
+
+    The returned weights are weak in sampled regions and rise smoothly inside
+    unsupported phase gaps.  They are not normalized to unit mean, so
+    ``global_floor`` really controls how much the anchor acts where the data
+    already provide support.
+    """
+
+    if not np.isfinite(P0) or float(P0) <= 0:
+        raise ValueError("soft anchor requires a finite positive period")
+    if not (0.0 <= float(global_floor) <= 1.0):
+        raise ValueError("soft-anchor global_floor must be in [0, 1]")
+    if not np.isfinite(tolerance) or float(tolerance) <= 0:
+        raise ValueError("soft-anchor tolerance must be positive")
+
+    t, mag, emag, band_masks = args
+    t = np.asarray(t, dtype=float)
+    mag = np.asarray(mag, dtype=float)
+    emag = np.asarray(emag, dtype=float)
+    work_masks = [np.asarray(mask, dtype=bool).copy()
+                  for mask in band_masks]
+    order = max(1, min(int(order), _supported_fourier_order(
+        (t, mag, emag, work_masks), activated_bands, int(order),
+        min_residual_dof=1)))
+    minimum_band_points = max(2 * order + 3, 8)
+    coef_mode = _coef_mode(coef_mode)
+
+    # A small, deterministic robustification prevents one gross epoch from
+    # becoming the curve to which all higher orders are shrunk.  No class
+    # labels, catalog Fourier coefficients, or template identities enter.
+    n_iterations = max(int(clip_iterations), 0)
+    for _ in range(n_iterations):
+        work_args = (t, mag, emag, work_masks)
+        theta_anchor = LSQ_fit(
+            P0, work_args, order, activated_bands,
+            opt_method='lsq', quality_weight=True,
+            coef_mode=coef_mode, epoch0=epoch0)
+        m0, amp, c1, c2, period, epoch = unpack_theta(
+            theta_anchor, len(activated_bands), order,
+            include_amp=True, coef_mode=coef_mode)
+        changed = False
+        new_masks = [mask.copy() for mask in work_masks]
+        for active_index, band_index in enumerate(activated_bands):
+            mask = work_masks[band_index]
+            indices = np.flatnonzero(mask)
+            if indices.size < minimum_band_points:
+                continue
+            prediction = F(
+                [m0[active_index], amp[active_index], c1, c2,
+                 period, epoch],
+                t[indices], order, coef_mode=coef_mode)
+            residual = mag[indices] - prediction
+            centre = float(np.nanmedian(residual))
+            mad_sigma = 1.4826 * float(
+                np.nanmedian(np.abs(residual - centre)))
+            scale = max(
+                mad_sigma,
+                float(np.nanmedian(np.maximum(
+                    emag[indices], params.ERR_FLOOR))),
+                float(params.ERR_FLOOR))
+            keep_local = np.abs(residual - centre) <= float(clip_sigma) * scale
+            if np.count_nonzero(keep_local) < minimum_band_points:
+                continue
+            candidate_mask = np.zeros_like(mask)
+            candidate_mask[indices[keep_local]] = True
+            if not np.array_equal(candidate_mask, mask):
+                new_masks[band_index] = candidate_mask
+                changed = True
+        work_masks = new_masks
+        if not changed:
+            break
+
+    work_args = (t, mag, emag, work_masks)
+    theta_anchor = LSQ_fit(
+        P0, work_args, order, activated_bands,
+        opt_method='lsq', quality_weight=True,
+        coef_mode=coef_mode, epoch0=epoch0)
+    _, _, c1, c2, period, epoch = unpack_theta(
+        theta_anchor, len(activated_bands), order,
+        include_amp=True, coef_mode=coef_mode)
+    phase_grid = np.linspace(0.0, 1.0, int(n_grid), endpoint=False)
+    time_grid = float(epoch) + float(period) * phase_grid
+    curve = F(
+        [0.0, 1.0, c1, c2, period, epoch], time_grid, order,
+        coef_mode=coef_mode)
+
+    active = np.zeros(t.size, dtype=bool)
+    for band_index in activated_bands:
+        active |= work_masks[band_index]
+    observed_phase = np.mod((t[active] - epoch) / period, 1.0)
+    gap_weight = _phase_gap_interior_weights(
+        observed_phase, phase_grid, min_gap=min_gap,
+        edge_fraction=edge_fraction)
+    weights = float(global_floor) + (
+        1.0 - float(global_floor)) * gap_weight
+    return {
+        "kind": "same-lightcurve-low-order",
+        "order": int(order),
+        "period": float(period),
+        "epoch": float(epoch),
+        "time_grid": time_grid,
+        "curve": _normalize_unit_shape(curve),
+        "weights": weights,
+        "tolerance": float(tolerance),
+        "n_retained": int(np.count_nonzero(active)),
+    }
+
+
+def data_driven_soft_anchor_penalty(
+        theta, n_bands, M_fit, anchor, coef_mode=None,
+        huber_delta=2.5):
+    """Penalize unsupported shape departure from a same-data pilot fit."""
+
+    if anchor is None:
+        return 0.0
+    _, _, c1, c2, period, epoch = unpack_theta(
+        theta, n_bands, M_fit=M_fit, include_amp=True,
+        coef_mode=coef_mode)
+    model_curve = F(
+        [0.0, 1.0, c1, c2, period, epoch],
+        np.asarray(anchor["time_grid"], dtype=float), M_fit,
+        coef_mode=coef_mode)
+    model_curve = _normalize_unit_shape(model_curve)
+    residual = (
+        model_curve - np.asarray(anchor["curve"], dtype=float)
+    ) / float(anchor["tolerance"])
+    weights = np.asarray(anchor["weights"], dtype=float)
+    return float(np.mean(
+        weights * huber2_loss(residual, delta=float(huber_delta))))
+
+
+def gap_ripple_penalty(theta, args, M_fit, activated_bands,
+                       coef_mode=None, n_grid=100, min_gap=0.10,
+                       edge_fraction=0.15, ratio=0.05):
+    """Penalize template curvature only inside unsupported phase gaps."""
+
+    t, _, _, band_masks = args
+    n_bands = len(activated_bands)
+    _, _, _, _, period, epoch = unpack_theta(
+        theta, n_bands, M_fit=M_fit, include_amp=True,
+        coef_mode=coef_mode)
+    active = np.zeros(len(t), dtype=bool)
+    for index in activated_bands:
+        active |= np.asarray(band_masks[index], dtype=bool)
+    observed_phase = np.mod((np.asarray(t)[active] - epoch) / period, 1.0)
+    phase_grid, curve = eval_on_grid(
+        theta, n_bands, M_fit, n_grid=n_grid, coef_mode=coef_mode)
+    weights = _phase_gap_interior_weights(
+        observed_phase, phase_grid, min_gap=min_gap,
+        edge_fraction=edge_fraction)
+    use = weights > 0
+    if not np.any(use):
+        return 0.0
+    curvature = np.roll(curve, -1) - 2.0 * curve + np.roll(curve, 1)
+    # Preserve the scale of the legacy 50-bin second-difference penalty while
+    # using a denser grid to localize gap interiors.
+    curvature = curvature * (float(n_grid) / 50.0) ** 2
+    weighted = np.abs(curvature[use]) * np.sqrt(weights[use])
+    return float(np.percentile(weighted, 95) ** 2
+                 + ratio * np.average(curvature[use] ** 2,
+                                      weights=weights[use]))
+
 def slope_penalty(theta, args, M_fit, activated_bands,coef_mode=None, n_grid=50,
                   n_branch_bins=5, min_branch_points=5, min_bin_points=2,
                   branch_err_frac=0.03, huber_delta=2.5):
@@ -212,12 +431,22 @@ def residual_autocorr_score(theta, args, M_fit, activated_bands, coef_mode=None)
 
 
 def fit_objective(theta, args, M_fit, n_dim, activated_bands, coef_mode=None,
-                  lam_spike=0.0, lam_h=0.0, lam_sl=0.0, n_grid=50, power=2.0, branch_err_frac=0.03):
+                  lam_spike=0.0, lam_h=0.0, lam_sl=0.0, n_grid=50,
+                  power=2.0, branch_err_frac=0.03,
+                  gap_aware_spike=False, soft_anchor=None,
+                  soft_anchor_lambda=0.0):
     n_bands = len(activated_bands)
     chi2_red = chisq(theta, *args, M_fit, n_dim, activated_bands, coef_mode=coef_mode)
-    pen_spike, pen_h, pen_slope = 0., 0., 0.
+    pen_spike, pen_h, pen_slope, pen_anchor = 0., 0., 0., 0.
     if lam_spike:
-        pen_spike = spike_penalty(theta, n_bands, M_fit, n_grid=n_grid, coef_mode=coef_mode) # spike penalty
+        if gap_aware_spike:
+            pen_spike = gap_ripple_penalty(
+                theta, args, M_fit, activated_bands,
+                n_grid=max(100, n_grid), coef_mode=coef_mode)
+        else:
+            pen_spike = spike_penalty(
+                theta, n_bands, M_fit, n_grid=n_grid,
+                coef_mode=coef_mode)
     if lam_h:
         pen_h = harmonics_penalty(theta, n_bands, M_fit, coef_mode=coef_mode, power=power) # harmonics penalty
     if lam_sl:
@@ -225,11 +454,18 @@ def fit_objective(theta, args, M_fit, n_dim, activated_bands, coef_mode=None,
                                 n_grid=n_grid, branch_err_frac=branch_err_frac, 
                                 n_branch_bins=params.N_BRANCH_BINS, min_branch_points=params.MIN_BRANCH_POINTS,
                                 huber_delta=params.HUBER_DELTA)
+    if soft_anchor_lambda and soft_anchor is not None:
+        pen_anchor = data_driven_soft_anchor_penalty(
+            theta, n_bands, M_fit, soft_anchor,
+            coef_mode=coef_mode, huber_delta=params.HUBER_DELTA)
     
-    return chi2_red + lam_spike * pen_spike + lam_h * pen_h + lam_sl * pen_slope
+    return (chi2_red + lam_spike * pen_spike + lam_h * pen_h
+            + lam_sl * pen_slope + soft_anchor_lambda * pen_anchor)
 
-def _fit_wrapper(P0, args, M_fit, bounds_full, activated_bands, phase_gaps, 
-                period_fit=False, use_optim=False, adaptive_lam=True, verbose=False):
+def _fit_wrapper(P0, args, M_fit, bounds_full, activated_bands, phase_gaps,
+                period_fit=False, use_optim=False, adaptive_lam=True,
+                verbose=False, gap_aware_spike=False, initial_epoch=None,
+                soft_anchor=None, soft_anchor_lambda=0.0):
     """
     Auxilary function to minimize objective function for given (P, M_fit)
     """
@@ -251,7 +487,9 @@ def _fit_wrapper(P0, args, M_fit, bounds_full, activated_bands, phase_gaps,
         lam = adjust_lambda(params.lam0, gmax, M_fit, N_eff, lam_min=params.lam_min, lam_max=params.lam_max) # set first band as pivotal band
         if verbose: print(f'phase_gap_max = {phase_gaps} / N_ft = {N_fts} / lam = {lam:.2e}')
     theta0 = LSQ_fit(P0, args, M_fit, activated_bands, phase_flag=phase_flag, 
-                        opt_method = params.opt_method, lam = lam, quality_weight=params.quality_weight)
+                        opt_method=params.opt_method, lam=lam,
+                        quality_weight=params.quality_weight,
+                        epoch0=initial_epoch)
 
     # -------------------------------------------------------------------------
     # Freeze phase-gap / steep-branch adaptation once per candidate order
@@ -300,7 +538,10 @@ def _fit_wrapper(P0, args, M_fit, bounds_full, activated_bands, phase_gaps,
                 lam_sl=lam_sl_eff,
                 n_grid=params.n_grid,
                 power=params.power,
-                branch_err_frac=params.branch_err_frac)
+                branch_err_frac=params.branch_err_frac,
+                gap_aware_spike=gap_aware_spike,
+                soft_anchor=soft_anchor,
+                soft_anchor_lambda=soft_anchor_lambda)
 
         res = minimize(objective_local, theta0, method='L-BFGS-B',
                        bounds=bounds_full)
@@ -311,7 +552,11 @@ def _fit_wrapper(P0, args, M_fit, bounds_full, activated_bands, phase_gaps,
     # optimization failure
     chi2_init = fit_objective(theta0, args, M_fit=M_fit, n_dim=n_dim, activated_bands=activated_bands, coef_mode=coef_mode,
                               lam_spike=lam_spike_eff, lam_h=lam_h_eff, lam_sl=lam_sl_eff,
-                              n_grid=params.n_grid, power=params.power, branch_err_frac=params.branch_err_frac)
+                              n_grid=params.n_grid, power=params.power,
+                              branch_err_frac=params.branch_err_frac,
+                              gap_aware_spike=gap_aware_spike,
+                              soft_anchor=soft_anchor,
+                              soft_anchor_lambda=soft_anchor_lambda)
     return theta0, chi2_init #, M_fit, n_dim
 
 def _build_bounds(n_bands, M_fit, coef_mode=None):
@@ -365,7 +610,9 @@ def _supported_fourier_order(args, activated_bands, requested_order,
 
 def select_order(P0, args, activated_bands, phase_gaps, M_trunc,
                  tie_breaker="minimum", period_fit=False, use_optim=False,
-                 adaptive_lam=False, verbose=False, M_ub_limit=None):
+                 adaptive_lam=False, verbose=False, M_ub_limit=None,
+                 gap_aware_spike=False, initial_epoch=None,
+                 soft_anchor=None, soft_anchor_lambda=0.0):
     t = args[0]
     phi = (t/P0)%1 # phase
     n_bands = len(activated_bands)
@@ -387,7 +634,11 @@ def select_order(P0, args, activated_bands, phase_gaps, M_trunc,
         bounds = _build_bounds(n_bands, M_fit, coef_mode=coef_mode)
         theta_opt, obj_opt = _fit_wrapper(P0, args, M_fit, bounds, activated_bands, phase_gaps,
                                           period_fit=period_fit, use_optim=use_optim,
-                                          adaptive_lam=adaptive_lam, verbose=False) # obj_opt != chi2
+                                          adaptive_lam=adaptive_lam, verbose=False,
+                                          gap_aware_spike=gap_aware_spike,
+                                          initial_epoch=initial_epoch,
+                                          soft_anchor=soft_anchor,
+                                          soft_anchor_lambda=soft_anchor_lambda) # obj_opt != chi2
         _, fval_grid = eval_on_grid(theta_opt, n_bands, M_fit, coef_mode=coef_mode)
         chi2_red_opt = chisq(theta_opt, *args, M_fit, len(theta_opt),
                               activated_bands, coef_mode=coef_mode)
@@ -488,7 +739,14 @@ def fourier_decomp(sid, mode='ogle', init='lasso',
                    verbose=False, plot_LS=False, K=None, harmonics=None,
                    epoch_data=None, reference_period=None,
                    reference_period_window=0.0,
-                   reference_period_screen_order=3):
+                   reference_period_screen_order=3,
+                   order_scan_strategy="full",
+                   gap_aware_spike=False,
+                   soft_anchor_lambda=0.0,
+                   soft_anchor_order=3,
+                   soft_anchor_tolerance=0.05,
+                   soft_anchor_global_floor=0.05,
+                   soft_anchor_min_gap=0.10):
     # Load data
     if mode is None: mode = get_data_config().mode
     cfg = get_data_config(mode)
@@ -496,6 +754,29 @@ def fourier_decomp(sid, mode='ogle', init='lasso',
     n_bands_full = cfg.n_bands_full; n_bands = cfg.n_bands # number of activated bands
 
     M_MAX, M_MIN = params.M_MAX, params.M_MIN
+
+    if order_scan_strategy not in {
+        "full", "linear_then_refine", "linear_top3_refine",
+        "linear_top5_refine",
+    }:
+        raise ValueError(
+            "order_scan_strategy must be 'full', 'linear_then_refine', "
+            "'linear_top3_refine', or 'linear_top5_refine'")
+    screen_use_optim = bool(
+        use_optim and order_scan_strategy == "full")
+
+    if not np.isfinite(soft_anchor_lambda) or soft_anchor_lambda < 0:
+        raise ValueError("soft_anchor_lambda must be finite and non-negative")
+    if soft_anchor_lambda and not use_optim:
+        raise ValueError(
+            "soft_anchor_lambda has no effect when use_optim=False")
+    if int(soft_anchor_order) < 1:
+        raise ValueError("soft_anchor_order must be at least 1")
+    if (not np.isfinite(soft_anchor_tolerance)
+            or float(soft_anchor_tolerance) <= 0):
+        raise ValueError("soft_anchor_tolerance must be finite and positive")
+    if not (0.0 <= float(soft_anchor_global_floor) <= 1.0):
+        raise ValueError("soft_anchor_global_floor must be in [0, 1]")
 
     if K is None: K = params.K
     if harmonics is None: harmonics = params.harmonics
@@ -549,7 +830,7 @@ def fourier_decomp(sid, mode='ogle', init='lasso',
     # ======================================
     # 1) initial period
     # =====================================
-    theta0_rrfit = None
+    rrfit_epoch = None
     if reference_period is not None and init == 'rrfit':
         raise ValueError(
             "reference_period and init='rrfit' are mutually exclusive")
@@ -561,30 +842,27 @@ def fourier_decomp(sid, mode='ogle', init='lasso',
     if init == 'rrfit':
         if df_rrfit is None:
             raise ValueError("init='rrfit' requires rrfit result file.")
-        if templates is None:
-            raise ValueError("init='rrfit' requires templates dict (A/Q).")
         sid_mask = (df_rrfit['ID'] == sid)
-        fit_row = df_rrfit[sid_mask]
+        fit_rows = df_rrfit[sid_mask]
+        if fit_rows.empty:
+            raise ValueError(f"RRFit result is missing source {sid}")
+        if len(fit_rows) != 1:
+            raise ValueError(
+                f"RRFit initializer requires one selected solution for "
+                f"source {sid}; found {len(fit_rows)}")
+        fit_row = fit_rows.iloc[0]
         P0 = float(fit_row['P'])
         E0 = float(fit_row['EPOCH'])
-        T_idx = int(fit_row['T'])
-        tmpl = templates[f'T{T_idx}']
-        if verbose: print(f'RRFit best template:\n{tmpl}')
-
-        A_tmp = np.zeros(M_MAX); Q_tmp = np.zeros(M_MAX)
-        A_RRFIT = np.array(tmpl.A, dtype=float)
-        Q_RRFIT = np.array(tmpl.Q, dtype=float)
-        mlen = min(len(A_RRFIT), M_MAX)
-        A_tmp[:mlen] = A_RRFIT[:mlen]
-        Q_tmp[:mlen] = Q_RRFIT[:mlen]
-
-        #theta0_rrfit = np.array([*m0_data, *A0_data, *A_tmp, *Q_tmp, P0, E0], dtype=float)
+        rrfit_epoch = E0
         
         P0s = np.array([P0])
         Zs = np.array([np.nan])
         Zmax = np.nan
 
-        if verbose: print(f'RRFit period = {P0:.4f}d / E = {E0:.4f}')
+        if verbose:
+            print(
+                f'RRFit P/E initializer = {P0:.4f}d / {E0:.4f}; '
+                'RRFit template morphology is not used')
     elif reference_period is not None:
         P0s, Zs = _reference_period_candidates(
             t, mag, emag, bands, reference_period=reference_period,
@@ -619,18 +897,33 @@ def fourier_decomp(sid, mode='ogle', init='lasso',
     # _fit_wrapper: return = (theta0, chi2)
     chi2_opt_1 = np.inf
     P0 = params.pmax # initialize (best period)
+    soft_anchor_best = None
     for Pi, Zi in zip(P0s, Zs):
         #if Zi<0.2*Zmax: continue # non significant component
         # phase filling check
         phase_gaps_i = np.array([phase_gap_score(t[mask], Pi, M_fit=M_fit_1) for mask in bmask]) # maximum gap in phase domain
-        
-        """
-        theta_init = None
-        if init == 'rrfit': theta_init = theta0_rrfit
-        """
-        theta_1_tmp, chi2_1_tmp = _fit_wrapper(Pi, args, M_fit_1, bounds_1, activated_bands, phase_gaps = phase_gaps_i, 
-                                               period_fit=period_fit, use_optim=use_optim, adaptive_lam=adaptive_lam, verbose=verbose)
-                                               #theta0=theta_init)
+        soft_anchor_i = None
+        if soft_anchor_lambda:
+            soft_anchor_i = build_data_driven_soft_anchor(
+                Pi, args, activated_bands, epoch0=rrfit_epoch,
+                order=soft_anchor_order,
+                n_grid=max(100, params.n_grid),
+                min_gap=soft_anchor_min_gap,
+                global_floor=soft_anchor_global_floor,
+                tolerance=soft_anchor_tolerance,
+                coef_mode=_coef_mode())
+            if verbose:
+                print(
+                    "same-data soft anchor = "
+                    f"M{soft_anchor_i['order']}, "
+                    f"retained {soft_anchor_i['n_retained']} epochs, "
+                    f"lambda={soft_anchor_lambda:g}")
+        theta_1_tmp, chi2_1_tmp = _fit_wrapper(Pi, args, M_fit_1, bounds_1, activated_bands, phase_gaps = phase_gaps_i,
+                                               period_fit=period_fit, use_optim=screen_use_optim, adaptive_lam=adaptive_lam, verbose=verbose,
+                                               gap_aware_spike=gap_aware_spike,
+                                               initial_epoch=rrfit_epoch,
+                                               soft_anchor=soft_anchor_i,
+                                               soft_anchor_lambda=soft_anchor_lambda)
         if verbose:
             print(f"{Pi:.4f} days / gmax = {phase_gaps_i} / chi2 = {chi2_1_tmp:.4f}")
         if np.isfinite(chi2_1_tmp) and chi2_opt_1 > chi2_1_tmp: 
@@ -640,6 +933,7 @@ def fourier_decomp(sid, mode='ogle', init='lasso',
             chi2_opt_1 = chi2_1_tmp
             P0 = Pi; Zmax = Zi 
             phase_gaps = phase_gaps_i
+            soft_anchor_best = soft_anchor_i
             
     if not np.isfinite(chi2_opt_1):
         print(f'ID = {sid} / initial M={M_fit_1} fit failed.')
@@ -677,9 +971,66 @@ def fourier_decomp(sid, mode='ogle', init='lasso',
 
     M_fit_final, theta_opt_final, chi2_opt_final, obj_opt_final, score_final = select_order(
         P0, args, activated_bands, phase_gaps, M_fit_2,
-        period_fit=period_fit, use_optim=use_optim,
+        period_fit=period_fit, use_optim=screen_use_optim,
         adaptive_lam=adaptive_lam, verbose=verbose,
-        M_ub_limit=M_supported)
+        M_ub_limit=M_supported, gap_aware_spike=gap_aware_spike,
+        initial_epoch=rrfit_epoch, soft_anchor=soft_anchor_best,
+        soft_anchor_lambda=soft_anchor_lambda)
+
+    # Experimental speed path: screen all admissible orders by the linear
+    # initialization, then pay for one nonlinear solve at the selected order.
+    # The default "full" path remains unchanged until the benchmark gates pass.
+    if use_optim and order_scan_strategy in {
+        "linear_then_refine", "linear_top3_refine", "linear_top5_refine"
+    }:
+        refine_orders = [M_fit_final]
+        if order_scan_strategy in {
+            "linear_top3_refine", "linear_top5_refine"
+        }:
+            upper = min(M_supported, M_trunc + params.M_PAD)
+            radius = 1 if order_scan_strategy == "linear_top3_refine" else 2
+            refine_orders = sorted({
+                order for order in range(
+                    M_fit_final - radius, M_fit_final + radius + 1)
+                if params.M_MIN <= order <= upper
+            })
+        refined = []
+        for refine_order in refine_orders:
+            refine_bounds = _build_bounds(n_bands, refine_order)
+            theta_refine, obj_refine = _fit_wrapper(
+                P0, args, refine_order, refine_bounds,
+                activated_bands, phase_gaps, period_fit=period_fit,
+                use_optim=True, adaptive_lam=adaptive_lam,
+                verbose=verbose, gap_aware_spike=gap_aware_spike,
+                initial_epoch=rrfit_epoch,
+                soft_anchor=soft_anchor_best,
+                soft_anchor_lambda=soft_anchor_lambda)
+            n_dim_refine = len(theta_refine)
+            chi2_refine = chisq(
+                theta_refine, *args, refine_order, n_dim_refine,
+                activated_bands, coef_mode=_coef_mode())
+            rho_refine = residual_autocorr_score(
+                theta_refine, args, refine_order, activated_bands,
+                coef_mode=_coef_mode())
+            score_refine = (
+                bic(chi2_refine, calc_N_eff((t / P0) % 1,
+                                            n_grid=params.n_grid),
+                    n_dim_refine)
+                + params.RES_CORR_WEIGHT * np.abs(rho_refine)
+            )
+            refined.append((
+                refine_order, theta_refine, chi2_refine,
+                obj_refine, score_refine))
+        best_score = min(item[4] for item in refined)
+        best_chi2 = min(item[2] for item in refined)
+        tolerance = bic_tol(
+            calc_N_eff((t / P0) % 1, n_grid=params.n_grid),
+            min(refined, key=lambda item: item[4])[0], best_chi2,
+            c=params.BIC_TOL_WEIGHT)
+        near = [item for item in refined if item[4] - best_score <= tolerance]
+        near.sort(key=lambda item: item[0])
+        (M_fit_final, theta_opt_final, chi2_opt_final,
+         obj_opt_final, score_final) = near[0]
 
     m0, amp, A_fit, Q_fit, P, E = theta_to_AQ(theta_opt_final, n_bands, M_fit=M_fit_final,
                                               include_amp=True, coef_mode=_coef_mode())
@@ -807,7 +1158,10 @@ def fourier_decomp(sid, mode='ogle', init='lasso',
         theta_eval, args, M_fit_final, n_dim_eval, activated_bands,
         coef_mode='AQ', lam_spike=lam_spike_final, lam_h=lam_h_final,
         lam_sl=lam_sl_final, n_grid=params.n_grid, power=params.power,
-        branch_err_frac=params.branch_err_frac)
+        branch_err_frac=params.branch_err_frac,
+        gap_aware_spike=gap_aware_spike,
+        soft_anchor=soft_anchor_best,
+        soft_anchor_lambda=soft_anchor_lambda)
 
     if verbose:
         print(f'ID = {sid} / Final M_fit = {M_fit_final} / CHI2 = {chi2_opt_final:.2f} / F_obj = {obj_opt_final:.2f} / rrms = {rms[0]/sig[0]:.4f} / P = {P:.6f} days')
@@ -865,6 +1219,13 @@ def fit_period_candidates(
     use_optim: bool = True,
     adaptive_lam: bool = True,
     use_refit: bool = True,
+    order_scan_strategy: str = "full",
+    gap_aware_spike: bool = False,
+    soft_anchor_lambda: float = 0.0,
+    soft_anchor_order: int = 3,
+    soft_anchor_tolerance: float = 0.05,
+    soft_anchor_global_floor: float = 0.05,
+    soft_anchor_min_gap: float = 0.10,
     verbose: bool = False,
 ) -> pd.DataFrame:
     """Run fixed/local-period FD candidates for one already-loaded source.
@@ -922,6 +1283,13 @@ def fit_period_candidates(
                 reference_period=requested,
                 reference_period_window=reference_period_window,
                 epoch_data=epoch_data,
+                order_scan_strategy=order_scan_strategy,
+                gap_aware_spike=gap_aware_spike,
+                soft_anchor_lambda=soft_anchor_lambda,
+                soft_anchor_order=soft_anchor_order,
+                soft_anchor_tolerance=soft_anchor_tolerance,
+                soft_anchor_global_floor=soft_anchor_global_floor,
+                soft_anchor_min_gap=soft_anchor_min_gap,
             )
             if row is None:
                 raise RuntimeError("fourier_decomp_returned_none")

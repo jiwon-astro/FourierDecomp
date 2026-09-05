@@ -4,6 +4,7 @@ import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
 from pathlib import Path
+from tqdm.auto import tqdm
 from . import params
 from .IO import phot_names, epoch_arrays, get_data_config
 from .uncertainty import (
@@ -358,3 +359,211 @@ def plot_source_period_review(
         output_path.parent.mkdir(parents=True, exist_ok=True)
         fig.savefig(output_path, dpi=180, bbox_inches="tight")
     return fig
+
+
+def plot_rrfit_source_review(
+    source_id,
+    summary,
+    templates,
+    *,
+    ls_data=None,
+    mode: str = "gaia",
+    phase_cycles: int = 2,
+    max_period_families: int | None = None,
+    output_path: str | Path | None = None,
+):
+    """Plot saved RRFit template solutions without running Fourier decomposition.
+
+    Each row is one clustered period family.  For each band, the lowest
+    within-band-pair relative-chi-square RRFit result that contains that band
+    supplies its own period, epoch, amplitude, mean, and template index.
+    """
+
+    from . import RRFit, decomposition
+
+    cfg = get_data_config(mode)
+    if ls_data is None:
+        ls_data = decomposition.ls_data
+    sid_native = int(source_id) if str(source_id).isdigit() else source_id
+    t, mag, emag, bands = epoch_arrays(
+        ls_data, sid_native, mode=mode, monitor=False)
+    bands = np.asarray(bands).astype(str)
+    solutions = RRFit.build_rrfit_solution_families(summary)
+    if solutions.empty:
+        raise ValueError(f"No valid RRFit solution for source {source_id}")
+    if isinstance(templates, (str, Path)):
+        templates = RRFit.load_rrfit_templates(templates)
+
+    family_order = solutions[[
+        "period_family_index", "solution_id", "period_family", "n_bandpairs",
+        "family_score",
+    ]].drop_duplicates("period_family_index")
+    family_order["solution_rank"] = family_order["solution_id"].str.extract(
+        r"(\d+)", expand=False).astype(int)
+    family_order = family_order.sort_values("solution_rank")
+    if max_period_families is not None:
+        family_order = family_order.head(int(max_period_families))
+    nrows = len(family_order)
+    ncols = len(cfg.filters)
+    fig, axes = plt.subplots(
+        nrows, ncols, figsize=(5.1 * ncols, 3.5 * nrows),
+        squeeze=False, constrained_layout=True)
+    phase_unit = np.linspace(0.0, 1.0, 501, endpoint=True)
+    phase_curve = np.concatenate([
+        phase_unit + cycle for cycle in range(phase_cycles)])
+
+    for panel, family in enumerate(family_order.itertuples(index=False)):
+        group = solutions.loc[
+            solutions["period_family_index"].eq(family.period_family_index)]
+        used = []
+        for column, band_value in enumerate(cfg.filters):
+            band = str(band_value)
+            ax = axes[panel, column]
+            band_rows = group.loc[group["bandpair"].astype(str).map(
+                lambda value: band in value.split("+"))].sort_values(
+                    ["chi2_relative", "chi2"])
+            if band_rows.empty:
+                fold_period = float(family.period_family)
+                fold_epoch = float(group.iloc[0]["epoch"])
+                model_row = None
+            else:
+                model_row = band_rows.iloc[0]
+                fold_period = float(model_row["period"])
+                fold_epoch = float(model_row["epoch"])
+            mask = bands == band
+            phase = ((t[mask] - fold_epoch) / fold_period) % 1.0
+            phase = np.concatenate([
+                phase + cycle for cycle in range(phase_cycles)])
+            ax.errorbar(
+                phase, np.tile(mag[mask], phase_cycles),
+                yerr=np.tile(emag[mask], phase_cycles),
+                fmt=cfg.lc_markers[column], ms=3.2,
+                color=cfg.lc_colors[column], ecolor=cfg.lc_colors[column],
+                alpha=0.72, elinewidth=0.55, capsize=0, zorder=2)
+            if model_row is not None:
+                pair = str(model_row["bandpair"]).split("+")
+                pair_index = pair.index(band)
+                amplitude = float(model_row[f"amp_{pair_index + 1}"])
+                mean = float(model_row[f"mean_{pair_index + 1}"])
+                template_index = int(model_row["template_index"])
+                template = templates.get(template_index)
+                if template is None:
+                    raise KeyError(
+                        f"Template {template_index} is absent from templates.dat")
+                shape = RRFit.evaluate_rrfit_template(template, phase_unit)
+                ax.plot(
+                    phase_curve, mean + amplitude * np.tile(shape, phase_cycles),
+                    color="#E69F00", lw=2.0, zorder=3)
+                used.append(
+                    f"{band}:{model_row['bandpair']} P={fold_period:.7g} "
+                    f"T={template_index} chi2x={model_row['chi2_relative']:.3f}")
+            ax.invert_yaxis()
+            ax.set_xlim(0.0, float(phase_cycles))
+            ax.grid(alpha=0.15)
+            ax.set_xlabel("phase")
+            ax.set_ylabel(f"{band} [mag]")
+            if panel == 0:
+                ax.set_title(band.upper())
+        axes[panel, 0].text(
+            0.025, 0.035,
+            f"{family.solution_id}: median P={family.period_family:.8g} d   |   "
+            f"pairs={family.n_bandpairs}\n" + "\n".join(used),
+            transform=axes[panel, 0].transAxes, fontsize=8.6,
+            ha="left", va="bottom", linespacing=1.20,
+            bbox={
+                "boxstyle": "round,pad=0.40", "facecolor": "white",
+                "alpha": 0.88, "edgecolor": "0.72", "linewidth": 0.8,
+            })
+    fig.suptitle(
+        f"Gaia source {source_id}: saved RRFit period/template solutions (no FD)")
+    if output_path is not None:
+        output_path = Path(output_path)
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        fig.savefig(output_path, dpi=180, bbox_inches="tight")
+    return fig, solutions
+
+
+def write_rrfit_review_pdfs(
+    review_index,
+    templates,
+    output_dir,
+    *,
+    ls_data=None,
+    mode="gaia",
+    phase_cycles=2,
+    max_period_families=8,
+    overwrite=False,
+    verbose=True,
+):
+    """Write resumable one-source RRFit review PDFs and a solution index.
+
+    No Fourier decomposition is called.  One PDF per source is intentional:
+    completed files are restart boundaries and a multi-thousand-source review
+    does not have to rebuild one monolithic PDF after interruption.
+    """
+
+    from . import RRFit
+
+    output_dir = Path(output_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
+    frame = review_index.copy()
+    frame = frame.loc[frame["rrfit_ready"].astype(bool)].copy()
+    iterator = frame.itertuples(index=False)
+    if verbose:
+        iterator = tqdm(iterator, total=len(frame), desc="RRFit review PDFs")
+    pdf_rows = []
+    solution_rows = []
+    for record in iterator:
+        sid = str(record.ID)
+        period_bin = str(record.period_bin)
+        safe_bin = (
+            period_bin.replace(" ", "").replace("<", "lt")
+            .replace(">=", "ge").replace(".", "p"))
+        pdf_path = output_dir / safe_bin / f"{sid}.pdf"
+        status = "existing"
+        error = ""
+        try:
+            summary = RRFit.load_rrfit_summary(record.rrfit_summary)
+            solutions = RRFit.build_rrfit_solution_families(summary)
+            families = solutions[[
+                "solution_id", "period_family", "period_min", "period_max",
+                "n_bandpairs", "family_score",
+            ]].drop_duplicates("solution_id")
+            for family in families.itertuples(index=False):
+                solution_rows.append({
+                    "source_id": sid,
+                    "period_bin": period_bin,
+                    "solution_id": family.solution_id,
+                    "period_family": float(family.period_family),
+                    "period_min": float(family.period_min),
+                    "period_max": float(family.period_max),
+                    "n_bandpairs": int(family.n_bandpairs),
+                    "family_score": float(family.family_score),
+                    "pdf_path": str(pdf_path),
+                })
+            if overwrite or not pdf_path.exists():
+                figure, _ = plot_rrfit_source_review(
+                    sid, summary, templates, ls_data=ls_data, mode=mode,
+                    phase_cycles=phase_cycles,
+                    max_period_families=max_period_families,
+                    output_path=pdf_path)
+                plt.close(figure)
+                status = "written"
+        except Exception as exc:
+            status = "failed"
+            error = repr(exc)
+            plt.close("all")
+        pdf_rows.append({
+            "source_id": sid,
+            "period_bin": period_bin,
+            "review_priority": getattr(record, "review_priority", np.nan),
+            "pdf_path": str(pdf_path),
+            "status": status,
+            "error": error,
+        })
+    pdf_index = pd.DataFrame(pdf_rows)
+    solution_index = pd.DataFrame(solution_rows)
+    pdf_index.to_csv(output_dir / "rrfit_review_pdf_index.csv", index=False)
+    solution_index.to_csv(
+        output_dir / "rrfit_review_solution_index.csv", index=False)
+    return pdf_index, solution_index

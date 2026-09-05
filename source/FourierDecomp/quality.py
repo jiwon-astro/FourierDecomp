@@ -56,6 +56,155 @@ def coverage_entropy(phase, n_grid = 50):
     h = -(p * np.log(p)).sum()
     return float(h / np.log(n_grid))
 
+
+def phase_gap_intervals(phase, min_width=0.0):
+    """Return circular gaps as ``(start, stop, width)`` in unwrapped phase."""
+
+    phase = np.unique(sort_phase(phase))
+    if phase.size < 2:
+        return [(0.0, 1.0, 1.0)]
+    stop = np.r_[phase[1:], phase[0] + 1.0]
+    intervals = [
+        (float(start), float(end), float(end - start))
+        for start, end in zip(phase, stop)
+        if end - start >= float(min_width)
+    ]
+    return intervals
+
+
+def phase_gap_interior_mask(phase_grid, observed_phase, min_width=0.10,
+                            edge_fraction=0.15):
+    """Mark grid points lying inside poorly supported phase-gap interiors."""
+
+    grid = wrap_phase(phase_grid)
+    mask = np.zeros(grid.size, dtype=bool)
+    edge_fraction = float(np.clip(edge_fraction, 0.0, 0.49))
+    for start, stop, width in phase_gap_intervals(
+            observed_phase, min_width=min_width):
+        coordinate = np.mod(grid - start, 1.0)
+        u = coordinate / width
+        mask |= ((coordinate < width) & (u >= edge_fraction)
+                 & (u <= 1.0 - edge_fraction))
+    return mask
+
+
+def periodic_curve_diagnostics(phase, magnitude, observed_phase=None,
+                               gap_threshold=0.10, n_grid=512):
+    """Measure smoothness, tip sharpness, and unsupported-gap ripple.
+
+    The input curve is interpolated periodically to a common grid, making the
+    returned derivative metrics comparable between fitting configurations.
+    ``gap_extrema_count`` and ``gap_curvature_p95`` are defined only when raw
+    observation phases are supplied.
+    """
+
+    phase = wrap_phase(phase)
+    magnitude = np.asarray(magnitude, dtype=float)
+    finite = np.isfinite(phase) & np.isfinite(magnitude)
+    if np.count_nonzero(finite) < 4:
+        raise ValueError("periodic curve requires at least four finite points")
+    phase = phase[finite]
+    magnitude = magnitude[finite]
+    order = np.argsort(phase)
+    phase = phase[order]
+    magnitude = magnitude[order]
+    unique_phase, unique_index = np.unique(phase, return_index=True)
+    magnitude = magnitude[unique_index]
+    phase = unique_phase
+    if phase.size < 4:
+        raise ValueError("periodic curve requires four unique phases")
+    grid = np.linspace(0.0, 1.0, int(n_grid), endpoint=False)
+    extended_phase = np.r_[phase[-1] - 1.0, phase, phase[0] + 1.0]
+    extended_magnitude = np.r_[magnitude[-1], magnitude, magnitude[0]]
+    curve = np.interp(grid, extended_phase, extended_magnitude)
+    amplitude = float(np.ptp(curve))
+    scale = max(amplitude, np.finfo(float).eps)
+    step = 1.0 / len(grid)
+    derivative = (np.roll(curve, -1) - np.roll(curve, 1)) / (2.0 * step)
+    curvature = (
+        np.roll(curve, -1) - 2.0 * curve + np.roll(curve, 1)
+    ) / (step ** 2)
+    slope_sign = np.sign(derivative)
+    extrema = slope_sign != np.roll(slope_sign, 1)
+    # Do not count numerically flat changes as physical extrema.
+    slope_floor = 1e-4 * max(np.nanmax(np.abs(derivative)), 1.0)
+    extrema &= (
+        (np.abs(derivative) >= slope_floor)
+        | (np.abs(np.roll(derivative, 1)) >= slope_floor)
+    )
+    delta = np.diff(np.r_[curve, curve[0]])
+    result = {
+        "curve_amplitude": amplitude,
+        "tip_phase": float(grid[np.argmin(curve)]),
+        "trough_phase": float(grid[np.argmax(curve)]),
+        "normalized_max_slope": float(np.max(np.abs(derivative)) / scale),
+        "normalized_curvature_p95": float(
+            np.percentile(np.abs(curvature), 95) / scale),
+        "total_variation_ratio": float(np.sum(np.abs(delta)) / (2.0 * scale)),
+        "extrema_count": int(np.count_nonzero(extrema)),
+        "gap_extrema_count": 0,
+        "gap_curvature_p95": 0.0,
+        "gap_total_variation_fraction": 0.0,
+        "tip_nearest_observation": np.nan,
+    }
+    if observed_phase is not None:
+        observed = wrap_phase(observed_phase)
+        observed = observed[np.isfinite(observed)]
+        if observed.size:
+            gap_mask = phase_gap_interior_mask(
+                grid, observed, min_width=gap_threshold)
+            if np.any(gap_mask):
+                result["gap_extrema_count"] = int(
+                    np.count_nonzero(extrema & gap_mask))
+                result["gap_curvature_p95"] = float(
+                    np.percentile(np.abs(curvature[gap_mask]), 95) / scale)
+                edge_gap = gap_mask | np.roll(gap_mask, -1)
+                result["gap_total_variation_fraction"] = float(
+                    np.sum(np.abs(delta)[edge_gap])
+                    / max(np.sum(np.abs(delta)), np.finfo(float).eps))
+            distance = np.abs(observed - result["tip_phase"])
+            result["tip_nearest_observation"] = float(
+                np.min(np.minimum(distance, 1.0 - distance)))
+    return result
+
+
+def phase_aligned_curve_error(reference, candidate):
+    """Compare two periodic shapes after normalization and cyclic alignment."""
+
+    reference = np.asarray(reference, dtype=float)
+    candidate = np.asarray(candidate, dtype=float)
+    if reference.shape != candidate.shape or reference.ndim != 1:
+        raise ValueError("reference and candidate must be equal-length vectors")
+    if reference.size < 4:
+        raise ValueError("curves require at least four points")
+
+    def normalize(values):
+        amplitude = np.ptp(values)
+        if not np.isfinite(amplitude) or amplitude <= 0:
+            raise ValueError("curve amplitude must be positive and finite")
+        return (values - np.median(values)) / amplitude
+
+    ref = normalize(reference)
+    cand = normalize(candidate)
+    errors = np.asarray([
+        np.sqrt(np.mean((ref - np.roll(cand, shift)) ** 2))
+        for shift in range(ref.size)
+    ])
+    shift = int(np.argmin(errors))
+    aligned = np.roll(cand, shift)
+    tip_ref = int(np.argmin(ref))
+    tip_candidate = int(np.argmin(aligned))
+    phase_delta = abs(tip_ref - tip_candidate) / ref.size
+    phase_delta = min(phase_delta, 1.0 - phase_delta)
+    return {
+        "shape_rmse": float(errors[shift]),
+        "alignment_shift_phase": float(shift / ref.size),
+        "tip_phase_error": float(phase_delta),
+        "slope_rmse": float(np.sqrt(np.mean(
+            (np.roll(ref, -1) - ref
+             - (np.roll(aligned, -1) - aligned)) ** 2))),
+    }
+
 # ====================================
 # binning
 # ====================================

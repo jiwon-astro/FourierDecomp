@@ -461,3 +461,94 @@ def blocked_time_cv_period_score(
         output.update({"cv_rmse": np.nan, "cv_weighted_rmse": np.nan, "cv_n": 0})
     output["cv_folds_used"] = int(folds_used)
     return output
+
+
+def bootstrap_period_candidate_support(
+    epoch_data,
+    candidate_periods,
+    *,
+    n_boot=20,
+    random_state=0,
+    order=3,
+    n_splits=3,
+    block_labels=None,
+    transit_gap_days=0.25,
+):
+    """Estimate support among a fixed, small set of competing periods.
+
+    Gaia G/BP/RP epochs should be resampled together.  When explicit transit
+    IDs are unavailable, consecutive measurements separated by at most
+    ``transit_gap_days`` form a block.  Each bootstrap replicate chooses the
+    period with the smallest low-order blocked-time-CV error.  This is much
+    cheaper than rerunning RRFit or the full Fourier pipeline and does not
+    discover new aliases; pass all scientifically plausible period families.
+    """
+
+    t, mag, emag, bands = [np.asarray(value) for value in epoch_data]
+    periods = np.asarray(candidate_periods, dtype=float).ravel()
+    periods = periods[np.isfinite(periods) & (periods > 0)]
+    if periods.size < 2:
+        raise ValueError("candidate_periods must contain at least two values")
+    if not (len(t) == len(mag) == len(emag) == len(bands)):
+        raise ValueError("epoch_data arrays must have equal length")
+    if block_labels is None:
+        sorter = np.argsort(t)
+        sorted_t = t[sorter]
+        new_block = np.r_[True, np.diff(sorted_t) > float(transit_gap_days)]
+        sorted_labels = np.cumsum(new_block) - 1
+        block_labels = np.empty(len(t), dtype=int)
+        block_labels[sorter] = sorted_labels
+    else:
+        block_labels = np.asarray(block_labels)
+        if len(block_labels) != len(t):
+            raise ValueError("block_labels must match epoch_data length")
+    unique_blocks = np.unique(block_labels)
+    if unique_blocks.size < 4:
+        raise ValueError("at least four time/transit blocks are required")
+    rng = np.random.default_rng(int(random_state))
+    score_rows = []
+    winners = []
+    for replicate in range(int(n_boot)):
+        sampled_blocks = rng.choice(
+            unique_blocks, size=len(unique_blocks), replace=True)
+        index_parts = [np.flatnonzero(block_labels == block)
+                       for block in sampled_blocks]
+        sample_index = np.concatenate(index_parts)
+        sampled = (t[sample_index], mag[sample_index], emag[sample_index],
+                   bands[sample_index])
+        scores = []
+        for period in periods:
+            score = blocked_time_cv_period_score(
+                sampled, float(period), order=order, n_splits=n_splits)
+            value = float(score["cv_weighted_rmse"])
+            scores.append(value)
+            score_rows.append({
+                "bootstrap": replicate, "period": float(period),
+                "cv_weighted_rmse": value,
+            })
+        finite = np.isfinite(scores)
+        if np.any(finite):
+            winner = int(np.nanargmin(np.asarray(scores, dtype=float)))
+            winners.append(winner)
+    scores = pd.DataFrame(score_rows)
+    output = []
+    for index, period in enumerate(periods):
+        values = scores.loc[scores["period"].eq(period),
+                            "cv_weighted_rmse"].to_numpy(float)
+        values = values[np.isfinite(values)]
+        output.append({
+            "period": float(period),
+            "bootstrap_support": (
+                float(np.mean(np.asarray(winners) == index))
+                if winners else np.nan),
+            "score_q16": float(np.quantile(values, 0.16))
+            if values.size else np.nan,
+            "score_q50": float(np.quantile(values, 0.50))
+            if values.size else np.nan,
+            "score_q84": float(np.quantile(values, 0.84))
+            if values.size else np.nan,
+            "n_valid_bootstrap": int(values.size),
+        })
+    result = pd.DataFrame(output).sort_values(
+        ["bootstrap_support", "score_q50"], ascending=[False, True])
+    return result.reset_index(drop=True)

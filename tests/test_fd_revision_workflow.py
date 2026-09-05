@@ -3,6 +3,10 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
+from FourierDecomp import LC, RRFit, decomposition, quality
+from FourierDecomp.LSQ import LSQ_fit, unpack_theta
+from FourierDecomp.IO import build_fd_header
+from FourierDecomp.IO import RRFitLC
 from FourierDecomp.catalog import (
     build_gaia_fit_quality_table,
     merge_manifest_revisions,
@@ -12,6 +16,7 @@ from FourierDecomp.catalog import (
 )
 from FourierDecomp.period_finder import (
     blocked_time_cv_period_score,
+    bootstrap_period_candidate_support,
     build_period_candidate_bank,
 )
 
@@ -35,6 +40,179 @@ def _fd_frame():
         "gmax_g": [0.1, 0.1], "gmax_bp": [0.1, 0.1], "gmax_rp": [0.1, 0.1],
         "flag": [0, 0],
     })
+
+
+def test_rrfit_template_parser_and_sine_convention(tmp_path):
+    template_path = tmp_path / "templates.dat"
+    template_path.write_text(
+        "test.t1\n"
+        "9.999 9.999 0.5 999 9.999\n"
+        "1.0 0.0\n"
+        "0.0 0.0\n"
+    )
+    templates = RRFit.load_rrfit_templates(template_path)
+    phase = np.array([0.0, 0.25, 0.5, 0.75, 1.0])
+    curve = RRFit.evaluate_rrfit_template(templates[1], phase)
+    assert np.allclose(curve, [0.0, 1.0, 0.0, -1.0, 0.0], atol=1e-12)
+
+
+def test_rrfit_solution_families_are_clustered_without_auto_selection():
+    summary = pd.DataFrame({
+        "source_id": ["1", "1", "1"],
+        "bandpair": ["g+bp", "g+rp", "g+bp"],
+        "template_index": [1, 2, 3],
+        "epoch": [10.0, 10.1, 11.0],
+        "period": [2.0, 2.01, 5.0],
+        "amp_1": [0.3, 0.3, 0.3],
+        "amp_2": [0.2, 0.2, 0.2],
+        "mean_1": [15.0, 15.0, 15.0],
+        "mean_2": [15.5, 14.5, 15.5],
+        "chi2": [10.0, 11.0, 20.0],
+        "returncode": [0, 0, 0],
+    })
+    families = RRFit.build_rrfit_solution_families(
+        summary, relative_tolerance=0.01)
+    assert families["period_family_index"].nunique() == 2
+    two_day = families.loc[families["period"].lt(3.0)]
+    assert two_day["solution_id"].nunique() == 1
+    assert int(two_day["n_bandpairs"].iloc[0]) == 2
+
+
+def test_rrfit_fixed_period_jobs_do_not_open_a_period_window(tmp_path):
+    source = RRFitLC(
+        sid="1", fitlc_path=str(tmp_path / "1.fitlc"),
+        t=np.linspace(0.0, 10.0, 30),
+        mag=np.zeros(30), emag=np.full(30, 0.02),
+        bands=np.resize(np.array(["g", "bp", "rp"]), 30),
+    )
+    jobs, metadata = RRFit.build_rrfit_jobs(
+        source, tmp_path, mode="gaia", fixed_period=2.345,
+        bandpairs=(("g", "bp"), ("g", "rp")), save=False)
+    assert len(jobs) == 2
+    assert metadata["period_mode"] == "fixed"
+    assert np.isclose(metadata["fixed_period"], 2.345)
+    assert all(job.pmin == job.pmax == 2.345 for job in jobs)
+    assert {job.bandpair for job in jobs} == {"g+bp", "g+rp"}
+
+
+def test_periodic_curve_diagnostics_identifies_gap_only_region():
+    phase = np.linspace(0.0, 1.0, 256, endpoint=False)
+    curve = np.sin(2.0 * np.pi * phase)
+    observed = np.r_[np.linspace(0.0, 0.35, 20),
+                     np.linspace(0.65, 0.99, 20)]
+    diagnostic = quality.periodic_curve_diagnostics(
+        phase, curve, observed_phase=observed, gap_threshold=0.20)
+    assert diagnostic["curve_amplitude"] > 1.9
+    assert diagnostic["gap_curvature_p95"] > 0
+    assert diagnostic["tip_nearest_observation"] >= 0
+
+
+def test_phase_aligned_curve_error_removes_phase_origin():
+    phase = np.linspace(0.0, 1.0, 128, endpoint=False)
+    reference = np.sin(2.0 * np.pi * phase) + 0.2 * np.sin(4.0 * np.pi * phase)
+    candidate = np.roll(reference, 17)
+    result = quality.phase_aligned_curve_error(reference, candidate)
+    assert result["shape_rmse"] < 1e-12
+    assert result["tip_phase_error"] < 1e-12
+
+
+def test_same_lightcurve_soft_anchor_penalizes_added_ripple_without_template():
+    phase = np.r_[np.linspace(0.0, 0.36, 35, endpoint=False),
+                  np.linspace(0.64, 1.0, 35, endpoint=False)]
+    t = 20.0 + 2.0 * phase
+    mag = 15.0 + 0.30 * np.cos(2.0 * np.pi * phase)
+    error = np.full(t.size, 0.02)
+    args = (t, mag, error, [np.ones(t.size, dtype=bool)])
+    anchor = decomposition.build_data_driven_soft_anchor(
+        2.0, args, np.array([0]), epoch0=20.0, order=3,
+        n_grid=200, global_floor=0.05, tolerance=0.05)
+
+    theta3 = LSQ_fit(
+        2.0, args, 3, np.array([0]), opt_method="lsq",
+        quality_weight=True, epoch0=20.0, coef_mode="ab")
+    m0, amp, alpha, beta, period, epoch = unpack_theta(
+        theta3, 1, 3, include_amp=True, coef_mode="ab")
+    alpha6 = np.zeros(6)
+    beta6 = np.zeros(6)
+    alpha6[:3] = alpha
+    beta6[:3] = beta
+    theta_smooth = np.hstack([m0, amp, alpha6, beta6, period, epoch])
+    theta_ripple = theta_smooth.copy()
+    theta_ripple[2 + 5] = 0.15
+
+    smooth_penalty = decomposition.data_driven_soft_anchor_penalty(
+        theta_smooth, 1, 6, anchor, coef_mode="ab")
+    ripple_penalty = decomposition.data_driven_soft_anchor_penalty(
+        theta_ripple, 1, 6, anchor, coef_mode="ab")
+    assert anchor["kind"] == "same-lightcurve-low-order"
+    assert np.max(anchor["weights"]) > np.min(anchor["weights"])
+    assert smooth_penalty < 1e-10
+    assert ripple_penalty > smooth_penalty + 0.1
+
+
+def test_rrfit_initializer_uses_period_epoch_but_not_template_bank(monkeypatch):
+    period = 2.4
+    epoch = 100.0
+    phase = np.linspace(0.0, 1.0, 90, endpoint=False)
+    t = epoch + period * phase
+    mag = 15.0 + 0.25 * np.cos(2.0 * np.pi * phase)
+    error = np.full(t.size, 0.02)
+    bands = np.array(["I"] * t.size)
+    monkeypatch.setattr(
+        decomposition, "df_ident",
+        pd.DataFrame({"ID": ["test"], "pulsation": ["unknown"]}),
+        raising=False)
+    monkeypatch.setattr(
+        decomposition, "df_rrfit",
+        pd.DataFrame({
+            "ID": ["test"], "P": [period], "EPOCH": [epoch],
+            "T": [1],
+        }), raising=False)
+    monkeypatch.setattr(decomposition, "templates", None, raising=False)
+    row = decomposition.fourier_decomp(
+        "test", mode="ogle", init="rrfit", period_fit=False,
+        use_optim=False, adaptive_lam=False, use_refit=False,
+        epoch_data=(t, mag, error, bands))
+    assert row is not None
+    record = dict(zip(build_fd_header("ogle"), row))
+    assert np.isclose(float(record["P"]), period)
+    assert np.isclose(float(record["E"]), epoch)
+
+
+def test_rrfit_period_relation_labels_harmonic_and_window_alias():
+    harmonic = RRFit.period_relation_to_reference(2.5, 5.0)
+    assert harmonic["alias_relation"] == "harmonic_2"
+    window_period = 1.0 / (1.0 / 5.0 + 1.0)
+    alias = RRFit.period_relation_to_reference(
+        window_period, 5.0, alias_frequencies=[1.0])
+    assert alias["alias_relation"] == "window_m1+fw"
+
+
+def test_rrfit_review_plot_reads_saved_template_without_fd(tmp_path, monkeypatch):
+    t = np.linspace(0.0, 12.0, 45)
+    bands = np.resize(np.array(["g", "bp", "rp"]), len(t))
+    mag = 15.0 + 0.2 * np.sin(2.0 * np.pi * t / 2.0)
+    error = np.full(len(t), 0.02)
+    monkeypatch.setattr(
+        LC, "epoch_arrays",
+        lambda *args, **kwargs: (t, mag, error, bands))
+    summary = pd.DataFrame({
+        "source_id": ["1", "1"], "bandpair": ["g+bp", "g+rp"],
+        "template_index": [1, 1], "epoch": [0.0, 0.0],
+        "period": [2.0, 2.0], "amp_1": [0.2, 0.2],
+        "amp_2": [0.2, 0.2], "mean_1": [15.0, 15.0],
+        "mean_2": [15.0, 15.0], "chi2": [10.0, 11.0],
+        "returncode": [0, 0],
+    })
+    templates = {1: RRFit.RRFitTemplate(
+        1, "test", np.array([1.0]), np.array([0.0]))}
+    output = tmp_path / "review.png"
+    figure, solutions = LC.plot_rrfit_source_review(
+        "1", summary, templates, ls_data={}, output_path=output)
+    assert output.exists()
+    assert solutions["solution_id"].nunique() == 1
+    import matplotlib.pyplot as plt
+    plt.close(figure)
 
 
 def test_gaia_external_r21_outlier_is_review_only_when_periods_match():
@@ -79,6 +257,19 @@ def test_blocked_time_cv_prefers_the_generating_period():
     true_score = blocked_time_cv_period_score((t, mag, error, bands), 2.5)
     wrong_score = blocked_time_cv_period_score((t, mag, error, bands), 2.0)
     assert true_score["cv_rmse"] < wrong_score["cv_rmse"]
+
+
+def test_block_bootstrap_support_prefers_generating_period():
+    rng = np.random.default_rng(23)
+    t = np.sort(rng.uniform(0.0, 90.0, 90))
+    mag = 15.0 + 0.25 * np.sin(2.0 * np.pi * t / 3.0)
+    error = np.full(len(t), 0.02)
+    bands = np.array(["g"] * len(t))
+    support = bootstrap_period_candidate_support(
+        (t, mag, error, bands), [3.0, 2.2], n_boot=8,
+        random_state=1, order=2, n_splits=3)
+    assert support.iloc[0]["period"] == 3.0
+    assert support.iloc[0]["bootstrap_support"] > 0.5
 
 
 def test_one_source_manifest_update_and_job_selection(tmp_path):

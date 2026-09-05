@@ -164,12 +164,21 @@ def _worker_call(args):
     if len(args) == 17:
         # Backward compatibility before reference-guided refits were exposed.
         args = (*args, None, 0.0, 3)
+    if len(args) == 20:
+        # Backward compatibility before the opt-in order/gap strategy.
+        args = (*args, "full", False)
+    if len(args) == 22:
+        # Backward compatibility before the same-lightcurve soft anchor.
+        args = (*args, 0.0, 3, 0.05, 0.05, 0.10)
     (
         sid, mode, init, period_fit, use_optim, adaptive_lam, use_refit,
         verbose, return_error, error_n_draws, error_random_state,
         error_robust, rms_ratio_limit, min_occupied_fraction, max_phase_gap,
         K, harmonics, reference_period, reference_period_window,
-        reference_period_screen_order,
+        reference_period_screen_order, order_scan_strategy,
+        gap_aware_spike,
+        soft_anchor_lambda, soft_anchor_order, soft_anchor_tolerance,
+        soft_anchor_global_floor, soft_anchor_min_gap,
     ) = args
     from . import decomposition as decomp_mod
 
@@ -188,6 +197,13 @@ def _worker_call(args):
             reference_period=reference_period,
             reference_period_window=reference_period_window,
             reference_period_screen_order=reference_period_screen_order,
+            order_scan_strategy=order_scan_strategy,
+            gap_aware_spike=gap_aware_spike,
+            soft_anchor_lambda=soft_anchor_lambda,
+            soft_anchor_order=soft_anchor_order,
+            soft_anchor_tolerance=soft_anchor_tolerance,
+            soft_anchor_global_floor=soft_anchor_global_floor,
+            soft_anchor_min_gap=soft_anchor_min_gap,
         )
         if row is None:
             qa_record = make_qa_record(
@@ -241,6 +257,13 @@ def mp_run(
     reference_periods=None,
     reference_period_window=0.0,
     reference_period_screen_order=3,
+    order_scan_strategy="full",
+    gap_aware_spike=False,
+    soft_anchor_lambda=0.0,
+    soft_anchor_order=3,
+    soft_anchor_tolerance=0.05,
+    soft_anchor_global_floor=0.05,
+    soft_anchor_min_gap=0.10,
     resume=True,
 ):
     """
@@ -254,6 +277,8 @@ def mp_run(
     - reference_periods maps source ID -> trusted period and skips blind LS
     - reference_period_window=0 fixes P; a positive fraction permits only a
       bounded low-order local refinement around the trusted period
+    - soft_anchor_lambda>0 enables a class-agnostic, same-lightcurve low-order
+      shape anchor; no RRFit/template morphology is used
     """
 
     from . import decomposition as decomp_mod
@@ -336,6 +361,13 @@ def mp_run(
                          if reference_map is not None else None),
                         reference_period_window,
                         reference_period_screen_order,
+                        order_scan_strategy,
+                        gap_aware_spike,
+                        soft_anchor_lambda,
+                        soft_anchor_order,
+                        soft_anchor_tolerance,
+                        soft_anchor_global_floor,
+                        soft_anchor_min_gap,
                     )
                     for sid in ids
                 ),
@@ -757,6 +789,13 @@ def run_manifest_refits(
     return_error: bool = True,
     error_n_draws: int = 4000,
     error_random_state: int = 0,
+    order_scan_strategy: str = "full",
+    gap_aware_spike: bool = False,
+    soft_anchor_lambda: float = 0.0,
+    soft_anchor_order: int = 3,
+    soft_anchor_tolerance: float = 0.05,
+    soft_anchor_global_floor: float = 0.05,
+    soft_anchor_min_gap: float = 0.10,
     overwrite_request: bool = False,
 ) -> dict[str, Any]:
     """Refit explicit manifest jobs, guarded by a resumable request hash."""
@@ -785,6 +824,13 @@ def run_manifest_refits(
         "return_error": bool(return_error),
         "error_n_draws": int(error_n_draws),
         "error_random_state": int(error_random_state),
+        "order_scan_strategy": str(order_scan_strategy),
+        "gap_aware_spike": bool(gap_aware_spike),
+        "soft_anchor_lambda": float(soft_anchor_lambda),
+        "soft_anchor_order": int(soft_anchor_order),
+        "soft_anchor_tolerance": float(soft_anchor_tolerance),
+        "soft_anchor_global_floor": float(soft_anchor_global_floor),
+        "soft_anchor_min_gap": float(soft_anchor_min_gap),
     }
     request_hash = hashlib.sha256(
         json.dumps(request, sort_keys=True).encode("utf-8")).hexdigest()
@@ -807,6 +853,13 @@ def run_manifest_refits(
         error_random_state=error_random_state, qa_output=qa_path,
         reference_periods=period_map,
         reference_period_window=reference_period_window,
+        order_scan_strategy=order_scan_strategy,
+        gap_aware_spike=gap_aware_spike,
+        soft_anchor_lambda=soft_anchor_lambda,
+        soft_anchor_order=soft_anchor_order,
+        soft_anchor_tolerance=soft_anchor_tolerance,
+        soft_anchor_global_floor=soft_anchor_global_floor,
+        soft_anchor_min_gap=soft_anchor_min_gap,
         resume=True,
     )
     result.update({
